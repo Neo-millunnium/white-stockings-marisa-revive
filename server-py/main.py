@@ -111,3 +111,30 @@ def status():
 def hint():
     """提示线索:随机返回一条已审核通过的记忆(对应前端 hint 指令)。"""
     return svc.hint()
+
+
+@app.post("/Review")
+def review(secret: str = Form("")):
+    """手动触发一次 AI 审核(不等待凌晨 4:00 定时任务)。
+
+    需要 secret 与 config 的 REVIEW_SECRET 一致;REVIEW_SECRET 为空时禁用。
+    审核逻辑与定时任务相同:取最多 REVIEW_DAILY_LIMIT 条 pending 审核。
+    """
+    expected = config.get("REVIEW_SECRET")
+    if not expected or secret != expected:
+        return {"code": 403, "data": "无权限"}
+    result = svc.review_pending(limit=REVIEW_DAILY_LIMIT)
+    return {"code": 200, "data": result}
+
+
+@app.post("/Reload")
+def reload_index(secret: str = Form("")):
+    """手动从数据库重建内存索引(运维/测试用:审核状态在库中变更后同步)。
+
+    同样需要 secret 校验;REVIEW_SECRET 为空时禁用。
+    """
+    expected = config.get("REVIEW_SECRET")
+    if not expected or secret != expected:
+        return {"code": 403, "data": "无权限"}
+    svc.reload()
+    return {"code": 200, "data": "reloaded"}

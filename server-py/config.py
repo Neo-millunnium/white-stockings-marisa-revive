@@ -17,6 +17,7 @@ _DEFAULTS = {
     "DB_USER": "root",
     "DB_PASSWORD": "",
     "DB_NAME": "webmarisa",
+    "REVIEW_SECRET": "",      # POST /Review 手动触发审核的密钥(为空=禁用该接口)
 }
 
 # 加载 server-py/.env(若存在);用 setdefault 保证已有环境变量优先

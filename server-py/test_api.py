@@ -2,14 +2,21 @@
 """
 web-marisa Python 后端接口验证脚本。
 
-用法:先启动后端(在 server-py 目录下执行)
+用法:先启动后端(在 server-py 目录下执行,需配置 REVIEW_SECRET)
     .venv\\Scripts\\python -m uvicorn main:app --host 127.0.0.1 --port 3000
 再运行:
     python test_api.py
 
 依赖:仅标准库 urllib + SQLAlchemy(直接读 SQLite 文件校验数据)。
-覆盖:探活 / Status / Add 校验 / Reply 命中与未命中 / 子集合并 vs 非子集新增 /
-      Forget / 限流(11 次 Add 第 11 次 429)/ 命中随机性 / 数据库数据保留。
+覆盖:探活 / Status / Add 校验 / 审核流程(教学→pending→通过后生效)/
+      Reply 命中与未命中 / 子集合并 vs 非子集新增 / Forget / 限流 /
+      命中随机性 / 黑名单拒绝 / 数据库数据保留。
+
+注意(新契约):
+- 教学内容先进入待审队列(pending),不立即生效;审核通过(标记 approved)
+  并 /Reload 后才可被 Reply 命中、计入 Status。
+- 测试用 SQL 直连把测试行标记 approved + 调 /Reload 模拟"审核通过",
+  避免依赖外部 AI 审核 API。
 """
 import json
 import os
@@ -30,6 +37,9 @@ DB_ENGINE = create_engine(config.database_url())
 # 未命中兜底话术(必须与后端一致)
 MISS_ANSWER = "唔嗯...不懂你在说什么呢...教教我吧~"
 
+# 手动审核/reload 的密钥(必须与 server-py/.env 的 REVIEW_SECRET 一致)
+REVIEW_SECRET = config.get("REVIEW_SECRET") or "test_secret"
+
 # 测试专用 answer(带 __TEST__ 前缀,避免与库里原有记忆冲突)
 ANSWER_BASIC = "__TEST__苹果香蕉真的很好吃"
 ANSWER_MERGE_BASE = "__TEST__MERGE_BASE__"
@@ -37,6 +47,7 @@ ANSWER_MERGE_ADD = "__TEST__MERGE_ADD__"
 ANSWER_NONSUB = "__TEST__NONSUB__"
 ANSWER_RANDOM_A = "__TEST__RANDOM_A__"
 ANSWER_RANDOM_B = "__TEST__RANDOM_B__"
+ANSWER_BLACK = "__TEST__BLACK_ANSWER__"
 RATE_KEYWORD = "限流测试专用"
 RATE_ANSWER = "__TEST__RATE__"
 
@@ -60,11 +71,18 @@ failed = 0
 
 
 def sql(query):
-    """执行 SQL(通过 SQLAlchemy 直连 SQLite,返回首行首列的字符串或空串)。"""
+    """执行 SQL(通过 SQLAlchemy 直连 SQLite)。
+
+    - SELECT:返回首行首列的字符串或空串
+    - UPDATE/INSERT/DELETE:执行后返回 ""(不取行)
+    """
     with DB_ENGINE.connect() as conn:
         result = conn.execute(text(query))
-        row = result.fetchone()
-        return str(row[0]) if row else ""
+        if result.returns_rows:
+            row = result.fetchone()
+            return str(row[0]) if row else ""
+        conn.commit()
+        return ""
 
 
 def request(method, path, data=None):
@@ -88,10 +106,16 @@ def check(name, cond, detail=""):
         print("[FAIL] %s %s" % (name, detail))
 
 
+def approve_and_reload(answer):
+    """模拟审核通过:把该 answer 的行标记 approved,然后调 /Reload 重建索引。"""
+    sql("UPDATE memorise SET review_status = 'approved' WHERE answer = '%s';" % answer)
+    request("POST", "Reload", {"secret": REVIEW_SECRET})
+
+
 def all_test_answers():
     """本次测试会产生的全部 answer(含限流测试的)。"""
     return [ANSWER_BASIC, ANSWER_MERGE_BASE, ANSWER_MERGE_ADD, ANSWER_NONSUB,
-            ANSWER_RANDOM_A, ANSWER_RANDOM_B] + [RATE_ANSWER + str(i) for i in range(12)]
+            ANSWER_RANDOM_A, ANSWER_RANDOM_B, ANSWER_BLACK] + [RATE_ANSWER + str(i) for i in range(12)]
 
 
 def cleanup():
@@ -101,6 +125,12 @@ def cleanup():
             request("POST", "Forget", {"answer": ans})
         except Exception:
             pass
+    # 清掉黑名单测试残留
+    try:
+        sql("DELETE FROM blacklist WHERE answer = '%s';" % ANSWER_BLACK)
+        request("POST", "Reload", {"secret": REVIEW_SECRET})
+    except Exception:
+        pass
 
 
 try:
@@ -132,15 +162,24 @@ try:
     s, body = request("POST", "Status")
     check("Status 校验拒绝后不变", body.get("data") == baseline, str(body))
 
-    # ---- 4. 教学(Add):分词后入库,keyword 回显为分词结果 ----
+    # ---- 4. 教学(Add):入库为 pending,不立即生效(新契约) ----
     s, body = request("POST", "Add", {"ip": MAIN_IP, "keyword": "苹果香蕉", "answer": ANSWER_BASIC})
     d = body.get("data", {})
     check("Add 教学", s == 200 and body.get("code") == 200 and d.get("answer") == ANSWER_BASIC
           and d.get("keyword") == "苹果,香蕉" and d.get("ip") == MAIN_IP, str(body))
     s, body = request("POST", "Status")
-    check("Status 教学后 +1", body.get("data") == baseline + 1, str(body))
+    check("Status 教学后不变(pending 不入索引)", body.get("data") == baseline, str(body))
+    # pending 内容不可回复
+    s, body = request("POST", "Reply", {"keyword": "苹果香蕉"})
+    check("Reply pending 未命中", body.get("code") == 10001, str(body))
+    # 数据库里确实是 pending
+    st = sql("SELECT review_status FROM memorise WHERE answer = '%s';" % ANSWER_BASIC)
+    check("数据库标记 pending", st == "pending", "status=" + st)
 
-    # ---- 5. 回复命中(精确匹配优先):输入与 raw_keyword 完全相等 ----
+    # ---- 5. 审核通过后生效:精确匹配命中 ----
+    approve_and_reload(ANSWER_BASIC)
+    s, body = request("POST", "Status")
+    check("Status 审核通过后 +1", body.get("data") == baseline + 1, str(body))
     s, body = request("POST", "Reply", {"keyword": "苹果香蕉"})
     check("Reply 精确匹配命中", s == 200 and body.get("code") == 200
           and body.get("data", {}).get("answer") == ANSWER_BASIC, str(body))
@@ -148,13 +187,15 @@ try:
     hits = sql("SELECT hit_count FROM memorise WHERE answer = '%s';" % ANSWER_BASIC)
     check("Reply 后 hit_count 累加", hits.isdigit() and int(hits) >= 1, "hit_count=" + hits)
 
-    # ---- 6. 合并-子集:新分词集合完全包含于已有词条时合并 ----
+    # ---- 6. 合并-子集:新分词集合完全包含于已有词条时合并(基于已过审内容) ----
     s, body = request("POST", "Add", {"ip": MAIN_IP, "keyword": "草莓西瓜葡萄", "answer": ANSWER_MERGE_BASE})
     d = body.get("data", {})
     check("Add 合并基准词条", s == 200 and body.get("code") == 200 and d.get("keyword") == "草莓,西瓜,葡萄", str(body))
+    approve_and_reload(ANSWER_MERGE_BASE)
     s, body = request("POST", "Add", {"ip": MAIN_IP, "keyword": "草莓西瓜", "answer": ANSWER_MERGE_ADD})
     d = body.get("data", {})
     check("Add 子集合并", s == 200 and body.get("code") == 200 and d.get("keyword") == "草莓,西瓜,葡萄", str(body))
+    approve_and_reload(ANSWER_MERGE_ADD)
     # 合并后的新词条应能被精确匹配命中(返回新答案)
     s, body = request("POST", "Reply", {"keyword": "草莓西瓜"})
     check("Reply 命中合并词条", s == 200 and body.get("code") == 200
@@ -164,14 +205,17 @@ try:
     s, body = request("POST", "Add", {"ip": MAIN_IP, "keyword": "香蕉牛奶", "answer": ANSWER_NONSUB})
     d = body.get("data", {})
     check("Add 非子集新增", s == 200 and body.get("code") == 200 and d.get("keyword") == "香蕉,牛奶", str(body))
+    approve_and_reload(ANSWER_NONSUB)
     s, body = request("POST", "Status")
-    check("Status 四条教学后 +4", body.get("data") == baseline + 4, str(body))
+    check("Status 四条教学审核后 +4", body.get("data") == baseline + 4, str(body))
 
     # ---- 8. 命中随机性:教两条同前缀词条,Reply 多次应出现不同答案 ----
     s, body = request("POST", "Add", {"ip": MAIN_IP, "keyword": "西瓜牛奶", "answer": ANSWER_RANDOM_A})
     check("Add 随机A", s == 200 and body.get("code") == 200, str(body))
     s, body = request("POST", "Add", {"ip": MAIN_IP, "keyword": "西瓜豆浆", "answer": ANSWER_RANDOM_B})
     check("Add 随机B", s == 200 and body.get("code") == 200, str(body))
+    approve_and_reload(ANSWER_RANDOM_A)
+    approve_and_reload(ANSWER_RANDOM_B)
     answers = set()
     random_ok = True
     for i in range(20):
@@ -200,10 +244,23 @@ try:
             if not (s == 200 and body.get("code") == 429 and "频繁" in str(body.get("data"))):
                 rate_ok = False
     check("限流(前10次成功,第11次429)", rate_ok, str(body))
-    s, body = request("POST", "Status")
-    check("Status 限流10条后 +10", body.get("data") == baseline + 15, str(body))
 
-    # ---- 11. 数据库现有数据保留 ----
+    # ---- 11. 黑名单:被拒回答再次教学直接拒绝 ----
+    # 模拟:该回答曾在审核中被拒,进了黑名单库;Reload 后再次 Add 应被 400 拒绝
+    sql("INSERT OR IGNORE INTO blacklist (answer, created_at) VALUES ('%s', datetime('now'));" % ANSWER_BLACK)
+    request("POST", "Reload", {"secret": REVIEW_SECRET})
+    s, body = request("POST", "Add", {"ip": MAIN_IP, "keyword": "黑名单关键词", "answer": ANSWER_BLACK})
+    check("黑名单拒绝同回答", s == 200 and body.get("code") == 400 and "拒绝" in str(body.get("data")), str(body))
+    sql("DELETE FROM blacklist WHERE answer = '%s';" % ANSWER_BLACK)
+    request("POST", "Reload", {"secret": REVIEW_SECRET})
+    # 黑名单删除后,同回答可再次教学(pending)
+    s, body = request("POST", "Add", {"ip": MAIN_IP, "keyword": "黑名单关键词", "answer": ANSWER_BLACK})
+    check("黑名单移除后可再教学", s == 200 and body.get("code") == 200, str(body))
+    # 清理这条,避免污染(此时是 pending,直接 SQL 删 + Reload)
+    sql("DELETE FROM memorise WHERE answer = '%s';" % ANSWER_BLACK)
+    request("POST", "Reload", {"secret": REVIEW_SECRET})
+
+    # ---- 12. 数据库现有数据保留 ----
     cnt = int(sql("SELECT COUNT(*) FROM memorise;") or 0)
     check("数据库总条数保留", cnt >= baseline, "db条数=%d baseline=%d" % (cnt, baseline))
     for oa in ORIGIN_ANSWERS:

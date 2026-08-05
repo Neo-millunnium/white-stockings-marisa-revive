@@ -26,3 +26,14 @@ class Memorise(Base):
     updated_at = Column("updated_at", DateTime, nullable=True)            # 更新时间
     # AI 审核状态:pending=待审核 approved=已通过 rejected=已拒绝(仅 SQLite/MySQL 新列,旧数据 NULL 视为 approved)
     review_status = Column("review_status", String(16), nullable=True, default="pending")
+
+
+class Blacklist(Base):
+    """审核黑名单:被 AI 审核拒绝的回答(按 answer 原文精确匹配)。
+
+    教学 Add 时先查黑名单,命中直接拒绝(防止同一句违规内容反复提交)。
+    """
+    __tablename__ = "blacklist"
+
+    answer = Column("answer", String(500), primary_key=True)  # 被拒的回答原文
+    created_at = Column("created_at", DateTime, nullable=True)  # 加入黑名单时间

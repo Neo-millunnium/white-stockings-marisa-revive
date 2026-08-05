@@ -62,10 +62,15 @@ def run_migrations():
                     conn.execute(text(ddl.replace("ALTER TABLE memorise ADD COLUMN ", "ALTER TABLE memorise ADD COLUMN ")))
             conn.commit()
         return
-    # MySQL:补齐新增列
+    # MySQL:补齐新增列 + 建黑名单表
     with engine.connect() as conn:
         cols = _existing_columns_mysql(conn)
         for name, ddl in _ADD_COLUMNS.items():
             if name.lower() not in cols:
                 conn.execute(text(ddl))
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS blacklist ("
+            "answer VARCHAR(500) NOT NULL PRIMARY KEY, "
+            "created_at DATETIME NULL)"
+        ))
         conn.commit()

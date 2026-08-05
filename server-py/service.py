@@ -60,14 +60,14 @@ class MemoryIndex:
         self._lock = threading.Lock()   # 简单互斥锁,保证单进程内一致性
 
     def rebuild(self, session):
-        """启动时从数据库全量重建索引(rejected 违规内容不加载)。"""
+        """启动时从数据库全量重建索引(只加载已过审 approved 的内容)。"""
         with self._lock:
             self._index.clear()
             self._memories.clear()
             for row in session.query(models.Memorise).all():
                 entry = self._to_entry(row)
-                if entry.review_status == "rejected":
-                    continue  # 已被 AI 审核拒绝的内容不进入索引,不可回复
+                if entry.review_status != "approved":
+                    continue  # pending 未过审、rejected 被拒的内容都不进入索引,不可回复
                 self._memories[entry.memory_id] = entry
                 for tok in entry.tokens:
                     self._index[tok].add(entry.memory_id)
@@ -160,14 +160,21 @@ class MemoriseService:
         # 最近未命中的输入 (时间, 关键词),最多保留 50 条,仅内存不落库。
         # 后续可基于它做"待学习清单",当前不需要暴露接口。
         self.recent_misses = deque(maxlen=MISS_LOG_MAX)
+        # 审核黑名单:被拒回答原文的集合(启动时从库加载;add 时先查,命中即拒)
+        self.blacklist = set()
 
     def reload(self):
-        """启动时从数据库重建内存索引。"""
+        """启动时从数据库重建内存索引 + 加载黑名单。"""
         session = SessionLocal()
         try:
             self.index.rebuild(session)
+            self._load_blacklist(session)
         finally:
             session.close()
+
+    def _load_blacklist(self, session):
+        """把 blacklist 表全部读进内存(回答原文精确匹配)。"""
+        self.blacklist = {row.answer for row in session.query(models.Blacklist.answer).all()}
 
     # ---- 限流(轻量防滥用) ----
     def _check_rate_limit(self, ip):
@@ -203,9 +210,12 @@ class MemoriseService:
             return {"code": 400, "data": "参数不合法:回答不能为空"}
         if len(ans) > ANSWER_MAX_LEN:
             return {"code": 400, "data": "参数不合法:回答长度不能超过%d" % ANSWER_MAX_LEN}
-        # 3. 分词(有序去重);分词结果为空时用原始关键词兜底
+        # 3. 黑名单检查:该回答曾被 AI 审核拒绝过,直接拒绝教学(防止同一句违规反复提交)
+        if ans in self.blacklist:
+            return {"code": 400, "data": "这个回答好像不太妙,魔理沙拒绝记住它~"}
+        # 4. 分词(有序去重);分词结果为空时用原始关键词兜底
         tokens = cut_keyword(kw) or [kw]
-        # 4. 合并逻辑改进(修复原 bug):仅当新分词集合完全包含于某条已有记忆的分词集合(子集)时才合并;
+        # 5. 合并逻辑改进(修复原 bug):仅当新分词集合完全包含于某条已有记忆的分词集合(子集)时才合并;
         #    合并后的 keyword 为"已有词条 + 新词"的有序去重;否则新增一条记忆。
         stored_tokens = tokens
         for entry in self.index.all_entries():
@@ -213,7 +223,8 @@ class MemoriseService:
             if existing and set(tokens) <= set(existing):
                 stored_tokens = list(dict.fromkeys(existing + tokens))  # 有序去重
                 break
-        # 5. 入库
+        # 6. 入库(仅待审队列):新内容标记 pending,不进入内存索引、不可回复;
+        #    每天 4:00 AI 审核通过后才进索引生效,被拒的回答进黑名单。
         session = SessionLocal()
         try:
             now = datetime.now()
@@ -225,13 +236,12 @@ class MemoriseService:
                 hit_count=0,
                 created_at=now,
                 updated_at=now,
-                review_status="pending",  # 新教学内容先标记待审核,凌晨 4:00 由 AI 批量审核
+                review_status="pending",
             )
             session.add(row)
             session.commit()
             session.refresh(row)  # 取回自增主键 memoryId
-            # 6. 同步更新内存索引
-            self.index.add(MemoryEntry(row.memory_id, stored_tokens, ans, kw, 0, "pending"))
+            # 注意:不调用 self.index.add —— pending 内容不进索引,审核通过才生效
             return {
                 "code": 200,
                 "data": {
@@ -343,8 +353,8 @@ class MemoriseService:
         - 取最多 limit 条 pending 内容(默认 REVIEW_DAILY_LIMIT,由调用方传入)
         - reviewer 为可调用对象 f(keyword, answer) -> {"violate": bool, "reason": str};
           未传则用 review.review_text
-        - 违规:标记 rejected 并从内存索引移除(相当于删除,不再回复)
-        - 正常:标记 approved,继续生效
+        - 违规:回答原文写入黑名单(库 + 内存),并从数据库删除(彻底清除,不可回复)
+        - 正常:标记 approved,并加入内存索引(此时才真正生效、可被回复)
         - 审核抛异常:保持 pending,下轮重试
         返回 {"reviewed": n, "rejected": m, "errors": e} 便于日志。
         """
@@ -368,17 +378,22 @@ class MemoriseService:
                     errors += 1
                     continue  # API 失败保持 pending,下轮重试
                 if verdict.get("violate"):
-                    # 违规:从内存索引移除并从数据库删除(彻底清除,不再可回复)
-                    self.index.remove(row.memory_id)
+                    # 违规:回答原文进黑名单(库+内存),删行,不进索引
+                    now = datetime.now()
+                    bl = models.Blacklist(answer=row.answer or "", created_at=now)
+                    session.add(bl)
                     session.delete(row)
+                    self.blacklist.add(row.answer or "")
                     rejected += 1
                 else:
+                    # 通过:标记 approved 并加入内存索引,此时才真正生效
                     row.review_status = "approved"
                     row.updated_at = datetime.now()
-                    # 同步内存索引里的状态(供将来按状态过滤)
-                    entry = self.index._memories.get(row.memory_id)
-                    if entry is not None:
-                        entry.review_status = "approved"
+                    tokens = split_keyword(row.keyword) if row.keyword else []
+                    self.index.add(MemoryEntry(
+                        row.memory_id, tokens, row.answer or "",
+                        row.raw_keyword or "", row.hit_count or 0, "approved",
+                    ))
                 reviewed += 1
             session.commit()
             return {"reviewed": reviewed, "rejected": rejected, "errors": errors}
