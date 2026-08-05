@@ -29,6 +29,8 @@ if _ENV_PATH.exists():
         _key, _, _value = _line.partition("=")
         os.environ.setdefault(_key.strip(), _value.strip())
 
+# 审核用的 DeepSeek key 也可放在 server-py/.env 的 DEEPSEEK_API_KEY(不入库)
+
 
 def get(name: str) -> str:
     """读取配置项:环境变量 > .env > 默认值。"""

@@ -24,3 +24,5 @@ class Memorise(Base):
     hit_count = Column("hit_count", Integer, nullable=False, default=0, server_default="0")  # 被命中次数
     created_at = Column("created_at", DateTime, nullable=True)            # 创建时间
     updated_at = Column("updated_at", DateTime, nullable=True)            # 更新时间
+    # AI 审核状态:pending=待审核 approved=已通过 rejected=已拒绝(仅 SQLite/MySQL 新列,旧数据 NULL 视为 approved)
+    review_status = Column("review_status", String(16), nullable=True, default="pending")

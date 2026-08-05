@@ -28,6 +28,7 @@ _ADD_COLUMNS = {
     "hit_count": "ALTER TABLE memorise ADD COLUMN hit_count INT NOT NULL DEFAULT 0",
     "created_at": "ALTER TABLE memorise ADD COLUMN created_at DATETIME NULL",
     "updated_at": "ALTER TABLE memorise ADD COLUMN updated_at DATETIME NULL",
+    "review_status": "ALTER TABLE memorise ADD COLUMN review_status VARCHAR(16) NULL DEFAULT 'pending'",
 }
 
 

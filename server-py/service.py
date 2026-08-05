@@ -48,6 +48,7 @@ class MemoryEntry:
     answer: str
     raw_keyword: str    # 用户教学时的原始关键词(精确匹配用)
     hit_count: int = 0
+    review_status: str = "pending"  # pending/approved/rejected(旧数据 NULL 视为 approved)
 
 
 class MemoryIndex:
@@ -59,23 +60,26 @@ class MemoryIndex:
         self._lock = threading.Lock()   # 简单互斥锁,保证单进程内一致性
 
     def rebuild(self, session):
-        """启动时从数据库全量重建索引。"""
+        """启动时从数据库全量重建索引(rejected 违规内容不加载)。"""
         with self._lock:
             self._index.clear()
             self._memories.clear()
             for row in session.query(models.Memorise).all():
                 entry = self._to_entry(row)
+                if entry.review_status == "rejected":
+                    continue  # 已被 AI 审核拒绝的内容不进入索引,不可回复
                 self._memories[entry.memory_id] = entry
                 for tok in entry.tokens:
                     self._index[tok].add(entry.memory_id)
 
     @staticmethod
     def _to_entry(row):
-        """把 ORM 行转成内存条目;旧数据的 raw_keyword/hit_count 可能为 NULL,做兜底。"""
+        """把 ORM 行转成内存条目;旧数据的 raw_keyword/hit_count/review_status 可能为 NULL,做兜底。"""
         raw = row.raw_keyword or ""
         hits = row.hit_count or 0
+        status = row.review_status or "approved"  # 旧数据无审核列,视为已通过
         tokens = split_keyword(row.keyword) if row.keyword else []
-        return MemoryEntry(row.memory_id, tokens, row.answer or "", raw, hits)
+        return MemoryEntry(row.memory_id, tokens, row.answer or "", raw, hits, status)
 
     def add(self, entry):
         """教学后增量加入索引。"""
@@ -221,12 +225,13 @@ class MemoriseService:
                 hit_count=0,
                 created_at=now,
                 updated_at=now,
+                review_status="pending",  # 新教学内容先标记待审核,凌晨 4:00 由 AI 批量审核
             )
             session.add(row)
             session.commit()
             session.refresh(row)  # 取回自增主键 memoryId
             # 6. 同步更新内存索引
-            self.index.add(MemoryEntry(row.memory_id, stored_tokens, ans, kw, 0))
+            self.index.add(MemoryEntry(row.memory_id, stored_tokens, ans, kw, 0, "pending"))
             return {
                 "code": 200,
                 "data": {
@@ -310,3 +315,52 @@ class MemoriseService:
     def status(self):
         """返回当前记忆总条数。"""
         return {"code": 200, "data": self.index.count()}
+
+    # ---- AI 内容审核 ----
+    def review_pending(self, limit=None, reviewer=None):
+        """批量审核待审核内容(每天 4:00 定时调用)。
+
+        - 取最多 limit 条 pending 内容(默认 REVIEW_DAILY_LIMIT,由调用方传入)
+        - reviewer 为可调用对象 f(keyword, answer) -> {"violate": bool, "reason": str};
+          未传则用 review.review_text
+        - 违规:标记 rejected 并从内存索引移除(相当于删除,不再回复)
+        - 正常:标记 approved,继续生效
+        - 审核抛异常:保持 pending,下轮重试
+        返回 {"reviewed": n, "rejected": m, "errors": e} 便于日志。
+        """
+        import review as review_mod
+
+        reviewer = reviewer or review_mod.review_text
+        session = SessionLocal()
+        try:
+            pending = (
+                session.query(models.Memorise)
+                .filter(models.Memorise.review_status == "pending")
+                .order_by(models.Memorise.memory_id)
+                .limit(limit)
+                .all()
+            )
+            reviewed = rejected = errors = 0
+            for row in pending:
+                try:
+                    verdict = reviewer(row.keyword or "", row.answer or "")
+                except Exception:
+                    errors += 1
+                    continue  # API 失败保持 pending,下轮重试
+                if verdict.get("violate"):
+                    # 违规:从内存索引移除并从数据库删除(彻底清除,不再可回复)
+                    self.index.remove(row.memory_id)
+                    session.delete(row)
+                    rejected += 1
+                else:
+                    row.review_status = "approved"
+                    row.updated_at = datetime.now()
+                    # 同步内存索引里的状态(供将来按状态过滤)
+                    entry = self.index._memories.get(row.memory_id)
+                    if entry is not None:
+                        entry.review_status = "approved"
+                reviewed += 1
+            session.commit()
+            return {"reviewed": reviewed, "rejected": rejected, "errors": errors}
+        finally:
+            session.close()
