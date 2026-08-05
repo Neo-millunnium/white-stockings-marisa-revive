@@ -3,3 +3,7 @@
 dist_linux
 # Editor directories and files
 .idea
+
+# 运行时日志与临时文件
+*.log
+server.exe~

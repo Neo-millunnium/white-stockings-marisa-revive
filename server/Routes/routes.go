@@ -1,36 +1,21 @@
-package Routes
+package routes
 
 import (
-	"github.com/kataras/iris"
-	"github.com/kataras/iris/hero"
-	"server/Controllers"
-	"server/Datasource"
-	"server/Services"
-	"server/repository"
+	"github.com/gin-gonic/gin"
+
+	"server/handler"
 )
 
-func Configure(app *iris.Application) {
-	// hero
-	db := Datasource.GetInstace().GetMysqlDB()
-	hero.Register(
-		Services.NewMemoriseService(
-			repository.NewMemoriseRepo(db),
-		),
-	)
+// Register 注册所有路由。
+// 前端统一走 POST + form-urlencoded,为兼容历史调用,/ 同时支持 GET 和 POST。
+func Register(r *gin.Engine, h *handler.Handler) {
+	// 首页探活
+	r.GET("/", h.Index)
+	r.POST("/", h.Index)
 
-	// Index
-	app.Get("/", Controllers.GetIndexHandler)
-
-	// Core
-	//app.UseGlobal(before)
-	app.PartyFunc("/", func(r iris.Party) {
-		r.Post("Add", hero.Handler(Controllers.Add))
-		r.Post("Reply", hero.Handler(Controllers.Reply))
-		r.Post("Forget", hero.Handler(Controllers.Forget))
-		r.Post("Status", hero.Handler(Controllers.Status))
-	})
+	// 核心业务
+	r.POST("/Add", h.Add)
+	r.POST("/Reply", h.Reply)
+	r.POST("/Forget", h.Forget)
+	r.POST("/Status", h.Status)
 }
-
-//func before(ctx iris.Context) {
-//	log.Println("fuck: ", ctx.Path())
-//}

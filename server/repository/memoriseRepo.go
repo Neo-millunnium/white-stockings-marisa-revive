@@ -1,30 +1,24 @@
-/**
- * @Author: Tomonori
- * @Date: 2019/6/11 17:05
- * @File: memoriseRepo
- * @Desc:
- */
 package repository
 
 import (
 	"github.com/jinzhu/gorm"
-	"server/Models"
+
+	"server/model"
 )
 
+// IMemoriseRepo 记忆数据访问接口
 type IMemoriseRepo interface {
-	// 插入记忆
+	// AddMemory 插入一条记忆
 	AddMemory(data map[string]interface{}) bool
-	// 读取所有记忆
-	FetchAllMemory() (memorise []Models.Memorise)
-	// 读取一条记忆
-	FetchMemory(answer string) (memorise Models.Memorise)
-	// 删除一条记忆
+	// FetchAllMemory 读取全部记忆
+	FetchAllMemory() (memorise []model.Memorise)
+	// DeleteMemoryByAnswer 按 answer 删除记忆
 	DeleteMemoryByAnswer(answer string) bool
 }
 
-// new memory-based repository
+// NewMemoriseRepo 创建基于 gorm 的记忆仓库
 func NewMemoriseRepo(source *gorm.DB) IMemoriseRepo {
-	return &memoriseRepo{source}
+	return &memoriseRepo{source: source}
 }
 
 type memoriseRepo struct {
@@ -32,30 +26,27 @@ type memoriseRepo struct {
 }
 
 func (m *memoriseRepo) AddMemory(data map[string]interface{}) bool {
-	var db = m.source
-	memory := Models.Memorise{
-		Ip: data["ip"].(string),
+	memory := model.Memorise{
+		Ip:      data["ip"].(string),
 		Keyword: data["keyword"].(string),
-		Answer: data["answer"].(string),
+		Answer:  data["answer"].(string),
 	}
-	db.Create(memory)
+	// 注意:必须传指针,gorm 需要把自增主键写回结构体;
+	// 传值会触发 ErrUnaddressable 导致整个事务回滚,插入不生效
+	if err := m.source.Create(&memory).Error; err != nil {
+		return false
+	}
 	return true
 }
 
-func (m *memoriseRepo) FetchAllMemory() (memorise []Models.Memorise) {
-	var db = m.source
-	db.Find(&memorise)
-	return
-}
-
-func (m *memoriseRepo) FetchMemory(answer string) (memorise Models.Memorise) {
-	var db = m.source
-	db.Where("answer = ?", answer).First(&memorise)
+func (m *memoriseRepo) FetchAllMemory() (memorise []model.Memorise) {
+	m.source.Find(&memorise)
 	return
 }
 
 func (m *memoriseRepo) DeleteMemoryByAnswer(answer string) bool {
-	var db = m.source
-	db.Where("answer = ?", answer).Delete(Models.Memorise{})
+	if err := m.source.Where("answer = ?", answer).Delete(&model.Memorise{}).Error; err != nil {
+		return false
+	}
 	return true
 }
