@@ -316,6 +316,26 @@ class MemoriseService:
         """返回当前记忆总条数。"""
         return {"code": 200, "data": self.index.count()}
 
+    # ---- hint 提示线索 ----
+    def hint(self):
+        """随机返回一条已审核通过的记忆作为\"提示线索\"。
+
+        对应界面的 hint 指令(查看其他人自定义的内容提示或小小线索)。
+        知识库为空时返回兜底话术(业务码 10001)。
+        """
+        entries = [e for e in self.index.all_entries() if e.review_status != "rejected"]
+        if not entries:
+            return {"code": 10001, "data": {"answer": NOT_FOUND_ANSWER}}
+        chosen = random.choice(entries)
+        # 展示形式:关键词 -> 回答(让别人知道可以教什么/别人教过什么)
+        return {
+            "code": 200,
+            "data": {
+                "keyword": chosen.raw_keyword or chosen.answer,
+                "answer": chosen.answer,
+            },
+        }
+
     # ---- AI 内容审核 ----
     def review_pending(self, limit=None, reviewer=None):
         """批量审核待审核内容(每天 4:00 定时调用)。

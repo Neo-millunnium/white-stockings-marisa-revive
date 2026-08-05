@@ -56,4 +56,7 @@ export const api = {
 
   /** 状态:POST /Status,无参数,data 为知识条数 */
   status: () => request<number>('/Status'),
+
+  /** 提示线索:POST /Hint,无参数,data 为 {keyword, answer} 随机一条 */
+  hint: () => request<{ keyword: string; answer: string }>('/Hint'),
 }

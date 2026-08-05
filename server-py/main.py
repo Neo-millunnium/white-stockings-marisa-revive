@@ -105,3 +105,9 @@ def forget(answer: str = Form("")):
 def status():
     """状态:返回当前记忆总条数。"""
     return svc.status()
+
+
+@app.post("/Hint")
+def hint():
+    """提示线索:随机返回一条已审核通过的记忆(对应前端 hint 指令)。"""
+    return svc.hint()

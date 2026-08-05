@@ -13,8 +13,9 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 3. **深夜催睡(3:50-6:00)**:`service.py` 里 `in_sleep_window()` 判断,凌晨 3:50 ~ 6:00 之间 Reply 不查库直接返回固定话术 `SLEEP_ANSWER`,Add 教学也拒绝(返回 code 400 + SLEEP_ANSWER)。文案/时间边界是 `service.py` 顶部常量(SLEEP_START/SLEEP_END/SLEEP_ANSWER)可调。改这块先看常量注释
 4. **AI 内容审核**:新教学内容标记 `review_status=pending`,照常生效(先玩后审);每天 4:00 后台任务(`main.py` `_review_loop`)调 DeepSeek 批量审核最多 100 条(`REVIEW_DAILY_LIMIT`),违规的直接删行(`service.review_pending`),正常标记 approved。审核 API key 从环境变量 `DEEPSEEK_API_KEY` 读(见 `review.py`),未配置时审核自动禁用只标记 pending。改审核逻辑看 `review.py` + `service.review_pending`
 5. **教学格式 `关键词`回答`(反引号)是核心玩法**,前端 core/index.ts 和后端都依赖它
-6. **前端消息渲染用 v-text 纯文本**(安全),永远不要改回 v-html(存储型 XSS)
-7. **git 历史**:baseline commit 是原项目 zip 快照,后续是重构历史,不要改写历史、不要强推
+6. **hint 指令(提示线索)**:输入 hint 随机展示一条已审核通过的记忆(后端 `POST /Hint` -> `service.hint()`,前端 `marisaHint`)。application 指令已删除(原为废弃占位,无实现)
+7. **前端消息渲染用 v-text 纯文本**(安全),永远不要改回 v-html(存储型 XSS)
+8. **git 历史**:baseline commit 是原项目 zip 快照,后续是重构历史,不要改写历史、不要强推
 
 ## 技术栈
 

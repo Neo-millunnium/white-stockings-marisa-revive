@@ -96,4 +96,22 @@ export const Core = {
       return 0
     }
   },
+
+  /**
+   * 提示线索:随机返回一条已审核通过的记忆(关键词 -> 回答)。
+   * 对应界面的 hint 指令(查看其他人自定义的内容提示或小小线索)。
+   * 失败返回 null。
+   */
+  async hint(): Promise<{ keyword: string; answer: string } | null> {
+    try {
+      const res = await api.hint()
+      if (res.code === 200 && res.data?.answer) {
+        return { keyword: res.data.keyword || '', answer: res.data.answer }
+      }
+      return null
+    } catch (err) {
+      console.log(`提示获取失败 ... ${err}`)
+      return null
+    }
+  },
 }

@@ -32,14 +32,11 @@
             <span class="marisa-cmd">forget</span>&nbsp;忘记最后所说的内容
           </span>
           <span class="system-cmd cmd-collect">
-            <del><span class="marisa-cmd">application</span>&nbsp;管理外部应用接口</del>
-          </span>
-          <span class="system-cmd cmd-collect">
             <span class="marisa-cmd">status</span>&nbsp;查看目前知识所掌握情况
           </span>
           <div class="cmd_desc">
             另外你也可以通过输入
-            <del style="font-weight: bold">hint</del> 查看其他人自定义的内容提示或小小线索
+            <span style="font-weight: bold">hint</span> 查看其他人自定义的内容提示或小小线索
             <div class="cmd_desc_content">
               魔理沙无条件的相信你..她把你交给她的所有知识视作珍宝并会很认真的将其牢牢记住..不要让她学坏哦!
             </div>
@@ -92,7 +89,7 @@ async function sendMessage() {
   inputText.value = ''
 }
 
-/** 普通对话模式:识别 teach / forget / status 指令,否则交给魔理沙回复 */
+/** 普通对话模式:识别 teach / forget / status / hint 指令,否则交给魔理沙回复 */
 async function marisaThinking(content: string) {
   switch (content) {
     case 'teach':
@@ -105,6 +102,9 @@ async function marisaThinking(content: string) {
       break
     case 'status':
       await marisaStatus()
+      break
+    case 'hint':
+      await marisaHint()
       break
     default:
       await marisaReply(content)
@@ -161,6 +161,18 @@ async function marisaStatus() {
     )
   } else {
     talkList.value.push(Core.speak(MARISA, '我的记忆要一片混乱了 ...'))
+  }
+}
+
+/** 查看提示线索:随机展示一条已审核通过的记忆 */
+async function marisaHint() {
+  const hint = await Core.hint()
+  if (hint) {
+    talkList.value.push(
+      Core.speak(MARISA, `给你个小小线索：试试「${hint.keyword}」—— 有人教过：${hint.answer}`),
+    )
+  } else {
+    talkList.value.push(Core.speak(MARISA, '唔 ... 现在还没有任何线索可以给你，快教教我点什么吧 ~'))
   }
 }
 
