@@ -41,8 +41,11 @@ def _api_key() -> str:
         with open(env_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line.startswith("DEEPSEEK_API_KEY="):
-                    return line.split("=", 1)[1].strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key.strip() == "DEEPSEEK_API_KEY":
+                    return value.strip()
     except OSError:
         pass
     return ""
