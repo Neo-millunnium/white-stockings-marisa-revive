@@ -109,10 +109,10 @@ def hint():
 
 @app.post("/Review")
 def review(secret: str = Form("")):
-    """手动触发一次 AI 审核(不等待凌晨 4:00 定时任务)。
+    """手动触发一次 AI 审核(不等待每小时定时任务)。
 
     需要 secret 与 config 的 REVIEW_SECRET 一致;REVIEW_SECRET 为空时禁用。
-    审核逻辑与定时任务相同:取最多 REVIEW_DAILY_LIMIT 条 pending 审核。
+    审核逻辑与定时任务相同:取最多 REVIEW_BATCH_LIMIT 条 pending 审核。
     """
     expected = config.get("REVIEW_SECRET")
     if not expected or secret != expected:
