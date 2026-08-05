@@ -10,9 +10,10 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
    - `POST /Add`(ip/keyword/answer,教学)、`POST /Reply`(keyword,提问)、`POST /Forget`(answer)、`POST /Status`、`GET/POST /`(探活)
    - 业务码:`200` 成功、`400` 参数不合法、`429` 教学限流、`10001` 未命中
 2. **未命中兜底话术是产品逻辑**:`唔嗯...不懂你在说什么呢...教教我吧~`(前后端都有引用,别乱改)
-3. **教学格式 `关键词`回答`(反引号)是核心玩法**,前端 core/index.ts 和后端都依赖它
-4. **前端消息渲染用 v-text 纯文本**(安全),永远不要改回 v-html(存储型 XSS)
-5. **git 历史**:baseline commit 是原项目 zip 快照,后续是重构历史,不要改写历史、不要强推
+3. **深夜催睡(3:50-6:00)**:`service.py` 里 `in_sleep_window()` 判断,Reply 在凌晨 3:50 ~ 6:00 之间不查库,直接返回固定话术 `SLEEP_ANSWER`(常量,可改文案;时间边界 SLEEP_START/SLEEP_END 可调)。教学 Add 不受影响。改这块先看 `service.py` 顶部常量注释
+4. **教学格式 `关键词`回答`(反引号)是核心玩法**,前端 core/index.ts 和后端都依赖它
+5. **前端消息渲染用 v-text 纯文本**(安全),永远不要改回 v-html(存储型 XSS)
+6. **git 历史**:baseline commit 是原项目 zip 快照,后续是重构历史,不要改写历史、不要强推
 
 ## 技术栈
 

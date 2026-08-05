@@ -30,6 +30,12 @@ ADD_RATE_LIMIT = 10          # 每 IP 每分钟最多教学次数
 RATE_WINDOW = 60             # 限流时间窗口(秒)
 MISS_LOG_MAX = 50            # 内存中保留的最近未命中关键词条数
 
+# ---- 深夜催睡(产品逻辑,勿删)----
+# 凌晨 3:50 ~ 6:00 之间不回复正常内容,只输出固定催睡话术(与"2010 年调教 bot"同款玩法)
+SLEEP_START = (3, 50)        # (时, 分) 催睡开始
+SLEEP_END = (6, 0)           # (时, 分) 催睡结束(6:00 整恢复正常)
+SLEEP_ANSWER = "喂!都这个点了还不去睡觉?!熬夜会变丑的,明天还要一起偷书呢,快去睡!"
+
 # 加载 jieba 默认词典(启动时初始化)
 jieba.initialize()
 
@@ -128,6 +134,17 @@ def overlap_ratio(existing_tokens, input_tokens):
     return matched / len(existing_tokens)
 
 
+def in_sleep_window(now=None):
+    """是否处于深夜催睡时段(凌晨 SLEEP_START ~ SLEEP_END)。
+
+    支持注入 now 参数便于测试;默认取当前时间。
+    """
+    now = now or datetime.now()
+    cur = (now.hour, now.minute)
+    # 单日区间,不跨午夜:start <= t < end
+    return SLEEP_START <= cur < SLEEP_END
+
+
 class MemoriseService:
     """记忆服务:对 HTTP 层提供 Add/Reply/Forget/Status。"""
 
@@ -221,6 +238,9 @@ class MemoriseService:
     # ---- 回复 ----
     def reply(self, keyword):
         """回复:先精确匹配 raw_keyword;否则分词查索引按重合度 >= 40% 命中,多条随机选一条。"""
+        # 深夜催睡:凌晨 3:50 ~ 6:00 之间不对话,只输出固定催睡话术
+        if in_sleep_window():
+            return {"code": 200, "data": {"answer": SLEEP_ANSWER}}
         kw = (keyword or "").strip()
         if not kw:
             # 空输入直接按未命中处理(与 Go 版行为一致)
