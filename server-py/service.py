@@ -182,6 +182,9 @@ class MemoriseService:
     # ---- 教学 ----
     def add(self, ip, keyword, answer):
         """教学:限流 -> 校验 -> 分词 -> 子集合并或新增 -> 入库并更新索引。"""
+        # 深夜催睡:凌晨 3:50 ~ 6:00 之间不接受教学(与 Reply 拦截一致)
+        if in_sleep_window():
+            return {"code": 400, "data": SLEEP_ANSWER}
         # 1. 防滥用限流(每 IP 每分钟最多 ADD_RATE_LIMIT 次)
         if not self._check_rate_limit(ip or ""):
             return {"code": 429, "data": "教学太频繁了,休息一下吧~"}
