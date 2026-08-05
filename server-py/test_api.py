@@ -20,8 +20,8 @@ import urllib.request
 
 # 本机 MariaDB 客户端路径(与 server/test_api.py 一致)
 MYSQL = r"D:\tools\mariadb-10.6.27-winx64\bin\mysql.exe"
-# 后端地址(验证阶段固定 3100 端口)
-BASE = "http://127.0.0.1:3100"
+# 后端地址(正式端口 3000)
+BASE = "http://127.0.0.1:3000"
 
 # 未命中兜底话术(必须与后端一致)
 MISS_ANSWER = "唔嗯...不懂你在说什么呢...教教我吧~"
