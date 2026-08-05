@@ -31,8 +31,21 @@ _MODEL = "deepseek-chat"
 
 
 def _api_key() -> str:
-    """读取 DeepSeek API key(环境变量),为空则审核禁用。"""
-    return os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    """读取 DeepSeek API key:环境变量优先,其次读 server-py/.env(双保险,不依赖 import 顺序)。"""
+    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if key:
+        return key
+    # 兜底:从 server-py/.env 读(与 config.py 加载逻辑一致,避免单独 import review 时拿不到)
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("DEEPSEEK_API_KEY="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
 
 
 def review_text(keyword: str, answer: str) -> dict:
