@@ -24,27 +24,21 @@ import service
 svc = service.MemoriseService()
 
 # 审核任务配置
-REVIEW_HOUR = 4          # 每天 4:00 执行
-REVIEW_DAILY_LIMIT = 100  # 每次最多审核条数
+REVIEW_INTERVAL = 3600    # 每 3600 秒(1 小时)执行一次
+REVIEW_BATCH_LIMIT = 10   # 每次最多审核条数
 
 _log = logging.getLogger("marisa.review")
 
 
 async def _review_loop():
-    """后台审核任务:每天 REVIEW_HOUR:00 运行,最多审核 REVIEW_DAILY_LIMIT 条。"""
+    """后台审核任务:每小时运行一次,最多审核 REVIEW_BATCH_LIMIT 条 pending。"""
     while True:
         try:
-            now = datetime.now()
-            # 计算到下次 4:00 的秒数
-            next_run = now.replace(hour=REVIEW_HOUR, minute=0, second=0, microsecond=0)
-            if next_run <= now:
-                next_run += timedelta(days=1)
-            wait = (next_run - now).total_seconds()
-            _log.info("下次 AI 审核: %s (%.0f 分钟后)", next_run.strftime("%m-%d %H:%M"), wait / 60)
-            await asyncio.sleep(wait)
+            # 首次运行前也等待一个完整周期,避免启动即审核
+            await asyncio.sleep(REVIEW_INTERVAL)
             # 到点执行
             try:
-                result = svc.review_pending(limit=REVIEW_DAILY_LIMIT)
+                result = svc.review_pending(limit=REVIEW_BATCH_LIMIT)
                 _log.info("AI 审核完成: 审 %d 条,拒 %d 条,失败 %d 条",
                           result["reviewed"], result["rejected"], result["errors"])
             except Exception as e:
@@ -123,7 +117,7 @@ def review(secret: str = Form("")):
     expected = config.get("REVIEW_SECRET")
     if not expected or secret != expected:
         return {"code": 403, "data": "无权限"}
-    result = svc.review_pending(limit=REVIEW_DAILY_LIMIT)
+    result = svc.review_pending(limit=REVIEW_BATCH_LIMIT)
     return {"code": 200, "data": result}
 
 

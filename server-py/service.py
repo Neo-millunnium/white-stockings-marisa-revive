@@ -6,9 +6,11 @@
 - 启动时把全表加载成内存倒排索引(分词 -> 记忆ID 集合),Add/Delete 时增量维护,
   Reply 直接查索引而不是全表扫描。
 - 数据量小且单进程运行,索引一致性不做复杂处理,仅加简单互斥锁。
-- 分词用 jieba(加载时 jieba.initialize(),不需要自定义词典)。
 """
+import json
+import os
 import random
+import re
 import threading
 import time
 from collections import defaultdict, deque
@@ -38,6 +40,43 @@ SLEEP_ANSWER = "喂!都这个点了还不去睡觉?!熬夜会变丑的,明天还
 
 # 加载 jieba 默认词典(启动时初始化)
 jieba.initialize()
+
+# ---- 违禁词正则前处理 ----
+# 从 banned_words.txt 加载正则列表(每行一个,支持 Python re 语法;# 开头为注释)。
+# 教学 Add 时先匹配回答,命中直接拒绝并拉黑,不进入待审队列(减少 AI 审核负担)。
+_BANNED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "banned_words.txt")
+_banned_patterns = []
+
+
+def _load_banned_patterns():
+    """(重新)加载违禁词正则列表。文件缺失/全注释时为空列表(前处理不生效)。"""
+    global _banned_patterns
+    patterns = []
+    try:
+        with open(_BANNED_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    patterns.append(re.compile(line))
+                except re.error:
+                    pass  # 单条正则写错不影响其他条
+    except OSError:
+        pass
+    _banned_patterns = patterns
+    return patterns
+
+
+_load_banned_patterns()
+
+
+def match_banned(text_to_check):
+    """返回第一个命中的违禁词正则对象,未命中返回 None。"""
+    for pat in _banned_patterns:
+        if pat.search(text_to_check or ""):
+            return pat
+    return None
 
 
 @dataclass
@@ -212,6 +251,19 @@ class MemoriseService:
             return {"code": 400, "data": "参数不合法:回答长度不能超过%d" % ANSWER_MAX_LEN}
         # 3. 黑名单检查:该回答曾被 AI 审核拒绝过,直接拒绝教学(防止同一句违规反复提交)
         if ans in self.blacklist:
+            return {"code": 400, "data": "这个回答好像不太妙,魔理沙拒绝记住它~"}
+        # 3.5 违禁词前处理:正则命中违禁词的回答,直接拉黑 + 拒绝,不进待审队列
+        if match_banned(ans):
+            # 拉黑:入库 + 内存,防止换个关键词再教同一句
+            try:
+                session = SessionLocal()
+                now = datetime.now()
+                session.add(models.Blacklist(answer=ans, created_at=now))
+                session.commit()
+                self.blacklist.add(ans)
+                session.close()
+            except Exception:
+                pass
             return {"code": 400, "data": "这个回答好像不太妙,魔理沙拒绝记住它~"}
         # 4. 分词(有序去重);分词结果为空时用原始关键词兜底
         tokens = cut_keyword(kw) or [kw]
