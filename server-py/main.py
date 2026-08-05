@@ -84,9 +84,12 @@ def add(ip: str = Form(""), keyword: str = Form(""), answer: str = Form("")):
 
 
 @app.post("/Reply")
-def reply(keyword: str = Form("")):
-    """回复:接收 form 字段 keyword,命中返回回答,未命中返回兜底话术。"""
-    return svc.reply(keyword)
+def reply(ip: str = Form(""), keyword: str = Form("")):
+    """回复:接收 form 字段 ip/keyword,命中返回回答,未命中返回兜底话术。
+
+    ip 用于每 IP 限流(每 IP 每分钟最多 REPLY_RATE_LIMIT 次),由前端 getIp() 传入。
+    """
+    return svc.reply(ip, keyword)
 
 
 @app.post("/Forget")

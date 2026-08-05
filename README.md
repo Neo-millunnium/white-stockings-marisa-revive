@@ -100,13 +100,13 @@ python seed_qa.py  # 插入 39 条预设问答对
 | 接口 | 参数 | 说明 | 返回 |
 |------|------|------|------|
 | `POST /Add` | `ip`, `keyword`, `answer` | 教学(分词入库,子集合并) | `{code:200, data:{ip, keyword, answer}}` |
-| `POST /Reply` | `keyword` | 提问(精确匹配优先 → 分词命中 ≥40% 随机选) | 命中 `{code:200, data:{answer}}` / 未命中 `{code:10001, data:{answer:兜底话术}}` |
+| `POST /Reply` | `ip`, `keyword` | 提问(精确匹配优先 → 分词命中 ≥40% 随机选) | 命中 `{code:200, data:{answer}}` / 未命中 `{code:10001, data:{answer:兜底话术}}` |
 | `POST /Forget` | `answer` | 按回答删除 | `{code:200, data:"success"}` |
 | `POST /Status` | — | 知识条数 | `{code:200, data:整数}` |
 | `POST /Hint` | — | 随机一条提示线索(已审核内容) | `{code:200, data:{keyword, answer}}` |
 | `GET/POST /` | — | 探活 | `{code:200, message:"hello Marisa~"}` |
 
-业务码:`200` 成功、`400` 参数不合法、`429` 教学过于频繁(每 IP 每分钟 10 次)、`10001` 未命中。
+业务码:`200` 成功、`400` 参数不合法/黑名单/违禁词、`429` 限流(教学每 IP 每分钟 10 次,回复每 IP 每分钟 30 次)、`10001` 未命中。
 
 ## 特性
 

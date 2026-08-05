@@ -48,8 +48,8 @@ export const api = {
   add: (data: { ip: string; keyword: string; answer: string }) =>
     request<{ ip: string; keyword: string; answer: string }>('/Add', data),
 
-  /** 提问:POST /Reply,form: keyword。命中 code=200;未命中 code=10001(data.answer 为兜底话术) */
-  reply: (data: { keyword: string }) => request<{ answer: string }>('/Reply', data),
+  /** 提问:POST /Reply,form: ip, keyword。命中 code=200;未命中 code=10001(data.answer 为兜底话术);限流 code=429 */
+  reply: (data: { ip: string; keyword: string }) => request<{ answer: string }>('/Reply', data),
 
   /** 忘记:POST /Forget,form: answer,成功返回 data: "success" */
   forget: (data: { answer: string }) => request<string>('/Forget', data),

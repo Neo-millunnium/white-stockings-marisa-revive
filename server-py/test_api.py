@@ -170,7 +170,7 @@ try:
     s, body = request("POST", "Status")
     check("Status 教学后不变(pending 不入索引)", body.get("data") == baseline, str(body))
     # pending 内容不可回复
-    s, body = request("POST", "Reply", {"keyword": "苹果香蕉"})
+    s, body = request("POST", "Reply", {"ip": MAIN_IP, "keyword": "苹果香蕉"})
     check("Reply pending 未命中", body.get("code") == 10001, str(body))
     # 数据库里确实是 pending
     st = sql("SELECT review_status FROM memorise WHERE answer = '%s';" % ANSWER_BASIC)
@@ -180,7 +180,7 @@ try:
     approve_and_reload(ANSWER_BASIC)
     s, body = request("POST", "Status")
     check("Status 审核通过后 +1", body.get("data") == baseline + 1, str(body))
-    s, body = request("POST", "Reply", {"keyword": "苹果香蕉"})
+    s, body = request("POST", "Reply", {"ip": MAIN_IP, "keyword": "苹果香蕉"})
     check("Reply 精确匹配命中", s == 200 and body.get("code") == 200
           and body.get("data", {}).get("answer") == ANSWER_BASIC, str(body))
     # hit_count 应被累加(数据库中该行 >= 1)
@@ -197,7 +197,7 @@ try:
     check("Add 子集合并", s == 200 and body.get("code") == 200 and d.get("keyword") == "草莓,西瓜,葡萄", str(body))
     approve_and_reload(ANSWER_MERGE_ADD)
     # 合并后的新词条应能被精确匹配命中(返回新答案)
-    s, body = request("POST", "Reply", {"keyword": "草莓西瓜"})
+    s, body = request("POST", "Reply", {"ip": MAIN_IP, "keyword": "草莓西瓜"})
     check("Reply 命中合并词条", s == 200 and body.get("code") == 200
           and body.get("data", {}).get("answer") == ANSWER_MERGE_ADD, str(body))
 
@@ -219,7 +219,7 @@ try:
     answers = set()
     random_ok = True
     for i in range(20):
-        s, body = request("POST", "Reply", {"keyword": "西瓜"})
+        s, body = request("POST", "Reply", {"ip": MAIN_IP, "keyword": "西瓜"})
         ans = body.get("data", {}).get("answer")
         if not (s == 200 and body.get("code") == 200 and ans in (ANSWER_RANDOM_A, ANSWER_RANDOM_B)):
             random_ok = False
@@ -244,6 +244,20 @@ try:
             if not (s == 200 and body.get("code") == 429 and "频繁" in str(body.get("data"))):
                 rate_ok = False
     check("限流(前10次成功,第11次429)", rate_ok, str(body))
+
+    # ---- 10.5 回复限流:同一 IP 连续 31 次 Reply,第 31 次应 429 ----
+    reply_rate_ok = True
+    for i in range(31):
+        s, body = request("POST", "Reply", {"ip": RATE_IP, "keyword": "限流测试专用"})
+        if i < 30:
+            # 前 30 次:放行(可能命中或未命中,但不应 429)
+            if body.get("code") == 429:
+                reply_rate_ok = False
+        else:
+            # 第 31 次:应 429
+            if not (s == 200 and body.get("code") == 429 and "频繁" in str(body.get("data"))):
+                reply_rate_ok = False
+    check("Reply 限流(前30次成功,第31次429)", reply_rate_ok, str(body))
 
     # ---- 11. 黑名单:被拒回答再次教学直接拒绝 ----
     # 模拟:该回答曾在审核中被拒,进了黑名单库;Reload 后再次 Add 应被 400 拒绝

@@ -41,7 +41,8 @@ export const Core = {
    */
   async reply(content: string): Promise<string | undefined> {
     try {
-      const res = await api.reply({ keyword: content })
+      const ip = await getIp()
+      const res = await api.reply({ ip, keyword: content })
       if (res.code === 200) {
         return res.data?.answer
       }

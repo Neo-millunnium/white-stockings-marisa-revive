@@ -29,6 +29,7 @@ REPLY_THRESHOLD = 0.4        # 回复命中重合度阈值(与 Go 版一致)
 KEYWORD_MAX_LEN = 50         # 关键词最大长度(去首尾空白后校验)
 ANSWER_MAX_LEN = 500         # 回答最大长度(去首尾空白后校验)
 ADD_RATE_LIMIT = 10          # 每 IP 每分钟最多教学次数
+REPLY_RATE_LIMIT = 30        # 每 IP 每分钟最多回复次数
 RATE_WINDOW = 60             # 限流时间窗口(秒)
 MISS_LOG_MAX = 50            # 内存中保留的最近未命中关键词条数
 
@@ -193,8 +194,9 @@ class MemoriseService:
 
     def __init__(self):
         self.index = MemoryIndex()
-        # 每 IP 的教学时间戳队列(限流用),带独立锁
+        # 每 IP 的教学/回复时间戳队列(限流用,教学与回复独立计数),带独立锁
         self._add_logs = defaultdict(deque)
+        self._reply_logs = defaultdict(deque)
         self._rate_lock = threading.Lock()
         # 最近未命中的输入 (时间, 关键词),最多保留 50 条,仅内存不落库。
         # 后续可基于它做"待学习清单",当前不需要暴露接口。
@@ -216,18 +218,29 @@ class MemoriseService:
         self.blacklist = {row.answer for row in session.query(models.Blacklist.answer).all()}
 
     # ---- 限流(轻量防滥用) ----
-    def _check_rate_limit(self, ip):
-        """检查该 IP 最近 RATE_WINDOW 秒内教学次数是否已达上限,返回是否放行。"""
+    def _check_rate_limit(self, ip, logs, limit):
+        """通用限流检查:某 IP 在 RATE_WINDOW 秒窗口内是否已达 limit 次,返回是否放行。
+
+        logs 是 {ip: deque[时间戳]} 字典(教学/回复各自独立维护)。
+        """
         now = time.time()
         with self._rate_lock:
-            q = self._add_logs[ip]
+            q = logs[ip]
             # 清理超出窗口的时间戳
             while q and now - q[0] >= RATE_WINDOW:
                 q.popleft()
-            if len(q) >= ADD_RATE_LIMIT:
+            if len(q) >= limit:
                 return False
             q.append(now)
             return True
+
+    def _check_add_rate(self, ip):
+        """教学限流:每 IP 每分钟最多 ADD_RATE_LIMIT 次。"""
+        return self._check_rate_limit(ip, self._add_logs, ADD_RATE_LIMIT)
+
+    def _check_reply_rate(self, ip):
+        """回复限流:每 IP 每分钟最多 REPLY_RATE_LIMIT 次。"""
+        return self._check_rate_limit(ip, self._reply_logs, REPLY_RATE_LIMIT)
 
     # ---- 教学 ----
     def add(self, ip, keyword, answer):
@@ -236,7 +249,7 @@ class MemoriseService:
         if in_sleep_window():
             return {"code": 400, "data": SLEEP_ANSWER}
         # 1. 防滥用限流(每 IP 每分钟最多 ADD_RATE_LIMIT 次)
-        if not self._check_rate_limit(ip or ""):
+        if not self._check_add_rate(ip or ""):
             return {"code": 429, "data": "教学太频繁了,休息一下吧~"}
         # 2. 输入校验(新增逻辑:关键词/回答非空,长度限制)
         kw = (keyword or "").strip()
@@ -306,11 +319,14 @@ class MemoriseService:
             session.close()
 
     # ---- 回复 ----
-    def reply(self, keyword):
+    def reply(self, ip, keyword):
         """回复:先精确匹配 raw_keyword;否则分词查索引按重合度 >= 40% 命中,多条随机选一条。"""
         # 深夜催睡:凌晨 3:50 ~ 6:00 之间不对话,只输出固定催睡话术
         if in_sleep_window():
             return {"code": 200, "data": {"answer": SLEEP_ANSWER}}
+        # 防滥用限流(每 IP 每分钟最多 REPLY_RATE_LIMIT 次)
+        if not self._check_reply_rate(ip or ""):
+            return {"code": 429, "data": "问得太频繁了,歇一歇吧~"}
         kw = (keyword or "").strip()
         if not kw:
             # 空输入直接按未命中处理(与 Go 版行为一致)

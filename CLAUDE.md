@@ -6,9 +6,9 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 
 ## 关键约定(改代码前必读)
 
-1. **API 契约不可破坏**:全部接口 `POST + form-urlencoded`,返回 `{code, data}` JSON,HTTP 状态恒为 200(业务码在 JSON 里)。前端依赖这个契约,改了会挂。
-   - `POST /Add`(ip/keyword/answer,教学)、`POST /Reply`(keyword,提问)、`POST /Forget`(answer)、`POST /Status`、`GET/POST /`(探活)
-   - 业务码:`200` 成功、`400` 参数不合法、`429` 教学限流、`10001` 未命中
+1. **API 契约不可破坏**:全部接口 `POST + form-urlencoded`,返回 `{code, data}`;HTTP 状态恒 200,业务码在 JSON 里
+   - `POST /Add`(ip/keyword/answer,教学)、`POST /Reply`(**ip**/keyword,提问)、`POST /Forget`(answer)、`POST /Status`、`POST /Hint`、`GET/POST /`(探活)
+   - 业务码:`200` 成功、`400` 参数不合法/黑名单/违禁词、`429` 限流(教学每 IP 10 次/分、**回复每 IP 30 次/分**)、`10001` 未命中
 2. **未命中兜底话术是产品逻辑**:`唔嗯...不懂你在说什么呢...教教我吧~`(前后端都有引用,别乱改)
 3. **深夜催睡(3:50-6:00)**:`service.py` 里 `in_sleep_window()` 判断,凌晨 3:50 ~ 6:00 之间 Reply 不查库直接返回固定话术 `SLEEP_ANSWER`,Add 教学也拒绝(返回 code 400 + SLEEP_ANSWER)。文案/时间边界是 `service.py` 顶部常量(SLEEP_START/SLEEP_END/SLEEP_ANSWER)可调。改这块先看常量注释
 4. **AI 内容审核(先审后玩)**:教学内容 Add 后只进**待审队列**(`review_status=pending`),**不立即生效**(不进内存索引,Reply 答不出、Status 不计数);每小时后台任务(`main.py` `_review_loop`,间隔 `REVIEW_INTERVAL`、每批 `REVIEW_BATCH_LIMIT` 条)调 DeepSeek 批量审核,**通过才进索引生效,被拒的回答原文进黑名单**(`blacklist` 表,再次教学同回答直接 400 拒)。**违禁词前处理**:`server-py/banned_words.txt` 每行一个正则,教学时回答命中违禁词直接拒绝+拉黑,不进待审队列(`service.match_banned`)。审核 API key 从环境变量 `DEEPSEEK_API_KEY` 读(见 `review.py`,含 .env 兜底)。`POST /Review`(secret=`REVIEW_SECRET`)可手动触发审核,`POST /Reload`(同 secret)可从库重建索引。改审核逻辑看 `review.py` + `service.review_pending`
