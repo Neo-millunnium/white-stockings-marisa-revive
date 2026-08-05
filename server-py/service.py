@@ -308,10 +308,16 @@ class MemoriseService:
         # 1. 防滥用限流(每 IP 每分钟最多 ADD_RATE_LIMIT 次)
         if not self._check_add_rate(ip or ""):
             return {"code": 429, "data": "教学太频繁了,休息一下吧~"}
-        # 2. 输入校验(新增逻辑:关键词/回答非空,长度限制)
+        # 2.5 教学分类校验:teach word/sentence/syntax/logic/greeting/auto;不合法直接拒绝
+        cat = (category or "auto").strip().lower()
+        if cat not in TEACH_CATEGORIES:
+            return {"code": 400, "data": "教学分类不合法,可选:word/sentence/syntax/logic/greeting/auto"}
+        # 2.6 输入校验:greeting 是单条问候语,允许关键词为空(只教一句话);
+        #     其余分类必须是"关键词 -> 回答"问答对,两者都非空
+        is_greeting = cat == "greeting"
         kw = (keyword or "").strip()
         ans = (answer or "").strip()
-        if not kw:
+        if not kw and not is_greeting:
             return {"code": 400, "data": "参数不合法:关键词不能为空"}
         if len(kw) > KEYWORD_MAX_LEN:
             return {"code": 400, "data": "参数不合法:关键词长度不能超过%d" % KEYWORD_MAX_LEN}
@@ -319,10 +325,6 @@ class MemoriseService:
             return {"code": 400, "data": "参数不合法:回答不能为空"}
         if len(ans) > ANSWER_MAX_LEN:
             return {"code": 400, "data": "参数不合法:回答长度不能超过%d" % ANSWER_MAX_LEN}
-        # 2.5 教学分类校验:teach word/sentence/syntax/logic/greeting/auto;不合法直接拒绝
-        cat = (category or "auto").strip().lower()
-        if cat not in TEACH_CATEGORIES:
-            return {"code": 400, "data": "教学分类不合法,可选:word/sentence/syntax/logic/greeting/auto"}
         # 3. 黑名单检查:该回答曾被 AI 审核拒绝过,直接拒绝教学(防止同一句违规反复提交)
         if ans in self.blacklist:
             return {"code": 400, "data": "这个回答好像不太妙,魔理沙拒绝记住它~"}
@@ -343,12 +345,20 @@ class MemoriseService:
         tokens = cut_keyword(kw) or [kw]
         # 4.5 分类落值:auto 由问候词表自动判定(命中 -> greeting,否则 -> word)
         resolved_cat = detect_category(kw, tokens) if cat == "auto" else cat
+        # 4.6 greeting 语义:不是问答对,是单条问候语(开场白)。
+        #     关键词不参与检索——存储时清空 keyword/分词/raw_keyword,只保留 answer。
+        #     前端 teach greeting 单轮输入,auto 判定为 greeting 时同样只取 answer 作为问候语。
+        if resolved_cat == "greeting":
+            tokens = []
+            stored_tokens = []
+            kw = ""  # raw_keyword 一并清空,问候语不参与任何问答匹配
         # 5. 合并逻辑改进(修复原 bug):仅当新分词集合完全包含于某条已有记忆的分词集合(子集)时才合并;
         #    合并后的 keyword 为"已有词条 + 新词"的有序去重;否则新增一条记忆。
+        #    greeting 空分词不参与合并(空集是任何集合的子集,会误并入已有词条)。
         stored_tokens = tokens
         for entry in self.index.all_entries():
             existing = entry.tokens
-            if existing and set(tokens) <= set(existing):
+            if tokens and existing and set(tokens) <= set(existing):
                 stored_tokens = list(dict.fromkeys(existing + tokens))  # 有序去重
                 break
         # 6. 入库(仅待审队列):新内容标记 pending,不进入内存索引、不可回复;
@@ -397,10 +407,10 @@ class MemoriseService:
             # 空输入直接按未命中处理(与 Go 版行为一致)
             return {"code": 10001, "data": {"answer": NOT_FOUND_ANSWER}}
         # 1. 精确匹配优先:raw_keyword 与输入完全相等时直接返回该条(权重最高)
+        #    greeting 类不是问答对(raw_keyword 为空),天然不参与精确匹配
         exact = [e for e in self.index.all_entries() if e.raw_keyword and e.raw_keyword == kw]
         if exact:
-            # 多条时:greeting 分类优先(问候场景最先应答),同分类取最新一条
-            chosen = max(exact, key=lambda e: (e.category == "greeting", e.memory_id))
+            chosen = max(exact, key=lambda e: e.memory_id)  # 多条时取最新一条
             self._bump_hit(chosen)
             return {"code": 200, "data": {"answer": chosen.answer}}
         # 2. 分词后查倒排索引,收集重合度达到阈值的候选
@@ -477,6 +487,25 @@ class MemoriseService:
             else:
                 stats["unclassified"] += 1
         return {"code": 200, "data": stats}
+
+    # ---- greeting 开场白 ----
+    def greeting_rand(self):
+        """随机返回一条 greeting 分类记忆作为开场白(用户访问网站时由前端自动发送)。
+
+        对应 2010-2011 原版语义:greeting 类教学的是"开场白"——bot 主动说的欢迎语,
+        不是等用户问候才应答。无 greeting 词条时返回业务码 10001(前端静默跳过)。
+        """
+        entries = [e for e in self.index.all_entries() if e.category == "greeting"]
+        if not entries:
+            return {"code": 10001, "data": {"answer": NOT_FOUND_ANSWER}}
+        chosen = random.choice(entries)
+        return {
+            "code": 200,
+            "data": {
+                "keyword": chosen.raw_keyword or "",
+                "answer": chosen.answer,
+            },
+        }
 
     # ---- hint 提示线索 ----
     def hint(self):

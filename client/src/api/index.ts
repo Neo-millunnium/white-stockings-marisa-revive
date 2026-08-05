@@ -61,6 +61,9 @@ export const api = {
   categories: () =>
     request<Record<string, number>>('/Categories'),
 
+  /** 开场白:POST /Greeting,data 为 {keyword, answer},随机一条 greeting 分类记忆 */
+  greeting: () => request<{ keyword: string; answer: string }>('/Greeting'),
+
   /** 提示线索:POST /Hint,无参数,data 为 {keyword, answer} 随机一条 */
   hint: () => request<{ keyword: string; answer: string }>('/Hint'),
 }

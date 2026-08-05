@@ -129,6 +129,25 @@ async function marisaThinking(content: string) {
 async function startTeach(category: string, keyword: string) {
   teachCategory = category
   const catLabel = CATEGORY_LABELS[category] ?? category
+  if (category === 'greeting') {
+    // greeting 是单条问候语(开场白),不是问答对:输入一句问候语即可,一轮完成
+    talkList.value.push(
+      Core.speak(
+        MARISA,
+        '要教给魔里沙什么 ..? 问候语教学:直接输入一句问候语就行(或 teach greeting 问候语 一步完成),访问网站时魔理沙会用这句话跟你打招呼。中止教学输入 exit ..',
+      ),
+    )
+    talkList.value.push(Core.speak(MARISA, '（ < ゝω·）教学模式启动 ！'))
+    cmdFlag = 1
+    if (keyword) {
+      // teach greeting 你好呀:问候语已给出,直接完成教学
+      const ok = await Core.teach('`' + keyword, 'greeting')
+      talkList.value.push(Core.speak(MARISA, ok ? '行，我知道了' : '魔理沙不想记住 . . . . . . 对不起'))
+      cmdFlag = 0
+      teachCategory = 'auto'
+    }
+    return
+  }
   talkList.value.push(
     Core.speak(
       MARISA,
@@ -145,12 +164,23 @@ async function startTeach(category: string, keyword: string) {
   }
 }
 
-/** 教学模式:第一步输入关键词,第二步输入回答(内部用反引号拼成 关键词`回答) */
+/** 教学模式:greeting 单轮输入问候语;其他分类 第一步输入关键词,第二步输入回答(内部用反引号拼成 关键词`回答) */
 async function teachMarisa(content: string) {
   // 这些指令都会中止教学
   if (content === 'exit' || content === 'teach' || content === 'forget' || content === 'status') {
     talkList.value.push(Core.speak(YOU, '白絲魔理沙，退出学习模式'))
     cmdFlag = 0
+    return
+  }
+
+  // greeting 问候语模式:单轮,输入即问候语(无关键词)
+  if (teachCategory === 'greeting') {
+    const ok = await Core.teach('`' + content, 'greeting')
+    talkList.value.push(Core.speak(MARISA, ok ? '行，我知道了' : '魔理沙不想记住 . . . . . . 对不起'))
+    cmdFlag = 0
+    teachFlag = 0
+    teachContent = []
+    teachCategory = 'auto'
     return
   }
 
@@ -238,9 +268,14 @@ watch(
   { flush: 'post' },
 )
 
-onMounted(() => {
+onMounted(async () => {
   // 初始自动聚焦输入框(还原旧版 v-focus 指令效果)
   youInput.value?.focus()
+  // greeting 开场白:访问网站时自动随机发一条问候类记忆(2010-2011 原版语义,无则静默)
+  const g = await Core.greeting()
+  if (g) {
+    talkList.value.push(Core.speak(MARISA, g.answer))
+  }
 })
 </script>
 

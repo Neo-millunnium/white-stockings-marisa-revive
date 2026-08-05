@@ -110,6 +110,20 @@ export const Core = {
   },
 
   /**
+   * 开场白:随机返回一条 greeting 分类记忆(用户访问网站时自动打招呼)。
+   * 无 greeting 词条或失败返回 null,前端静默跳过。
+   */
+  async greeting(): Promise<{ keyword: string; answer: string } | null> {
+    try {
+      const res = await api.greeting()
+      return res.code === 200 && res.data ? res.data : null
+    } catch (err) {
+      console.log(`开场白 ... ${err}`)
+      return null
+    }
+  },
+
+  /**
    * 提示线索:随机返回一条已审核通过的记忆(关键词 -> 回答)。
    * 对应界面的 hint 指令(查看其他人自定义的内容提示或小小线索)。
    * 失败返回 null。

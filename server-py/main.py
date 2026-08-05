@@ -113,6 +113,12 @@ def categories():
     return svc.categories()
 
 
+@app.post("/Greeting")
+def greeting():
+    """开场白:随机返回一条 greeting 分类记忆(用户访问网站时由前端自动发送)。"""
+    return svc.greeting_rand()
+
+
 @app.post("/Hint")
 def hint():
     """提示线索:随机返回一条已审核通过的记忆(对应前端 hint 指令)。"""
