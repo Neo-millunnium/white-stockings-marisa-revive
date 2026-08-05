@@ -16,20 +16,21 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 
 ## 技术栈
 
-- 后端 `server-py/`:Python 3.11 · FastAPI · SQLAlchemy 2 · pymysql · jieba 分词
+- 后端 `server-py/`:Python 3.11 · FastAPI · SQLAlchemy 2 · jieba 分词
 - 前端 `client/`:Vue 3.5(Composition API)· Vite 8 · TypeScript 5 · Sass
-- 数据库:MariaDB 11.4(兼容 MySQL 5.7+),库 `webmarisa`,表 `memorise`(单数)
+- 数据库:SQLite(默认,`server-py/webmarisa.db`,零依赖零内存);可选 MySQL/MariaDB(`DB_TYPE=mysql`)
 - `server/`:旧 Go 版,保留参考,**已弃用,不要改**
 
 ## 后端结构(server-py/)
 
 ```
 main.py        FastAPI 入口 + 5 个路由(Add/Reply/Forget/Status/)
-config.py      配置:.env > 环境变量 > 默认值(root 空密码 @127.0.0.1:3306/webmarisa)
-database.py    SQLAlchemy 引擎 + 启动时自动建表/补列(ALTER TABLE)
+config.py      配置:.env > 环境变量 > 默认值(SQLite;DB_TYPE=mysql 切 MySQL)
+database.py    SQLAlchemy 引擎 + 启动自动建表(SQLite create_all / MySQL ALTER)
 models.py      Memorise ORM(memoryId 主键,ip/keyword/answer/raw_keyword/hit_count/created_at/updated_at)
 service.py     核心业务:分词/匹配/子集合并/限流/倒排索引/未命中记录
-test_api.py    接口测试(29 项,urllib 直连,连 127.0.0.1:3000)
+test_api.py    接口测试(29 项,urllib 连 127.0.0.1:3000 + SQLAlchemy 读 SQLite 校验)
+webmarisa.db   SQLite 数据文件(不入库,由程序生成)
 ```
 
 ### 核心业务逻辑(service.py)
@@ -50,7 +51,7 @@ cd server-py && .venv/Scripts/python -m uvicorn main:app --host 127.0.0.1 --port
 cd server-py && .venv/Scripts/python test_api.py
 
 # 注意:本机 python 无 pip,装依赖用 uv(.venv 已存在则无需重装)
-cd server-py && uv pip install fastapi uvicorn sqlalchemy pymysql jieba
+cd server-py && uv pip install fastapi uvicorn sqlalchemy jieba
 ```
 
 ## 前端结构(client/)

@@ -48,9 +48,9 @@
 
 | 层 | 技术 |
 |----|------|
-| 后端 | Python 3.11 · FastAPI · SQLAlchemy 2 · pymysql · jieba 分词 |
+| 后端 | Python 3.11 · FastAPI · SQLAlchemy 2 · jieba 分词 |
 | 前端 | Vue 3.5 · Vite 8 · TypeScript 5 · Sass |
-| 数据库 | MariaDB 11.4(MySQL 5.7+ 兼容) |
+| 数据库 | SQLite(默认,零依赖零内存);可选 MySQL/MariaDB(`DB_TYPE=mysql`) |
 
 ## 目录结构
 
@@ -71,29 +71,27 @@ web-marisa/
 
 ## 快速开始(本地开发)
 
-依赖:Python 3.11+、Node 18+、MariaDB/MySQL(建议 11.4)
+依赖:Python 3.11+、Node 18+。数据库默认 SQLite,**无需安装数据库软件**。
 
 ```bash
-# 1. 数据库:建库
-mysql -u root -e "CREATE DATABASE webmarisa DEFAULT CHARACTER SET utf8mb4;"
-
-# 2. 后端
+# 1. 后端(首次启动自动建表 server-py/webmarisa.db)
 cd server-py
-uv venv && uv pip install fastapi uvicorn sqlalchemy pymysql jieba
-#   首次启动会自动建表/补列(见 database.py)
+uv venv && uv pip install fastapi uvicorn sqlalchemy jieba
 uv run python -m uvicorn main:app --host 127.0.0.1 --port 3000
 
-# 3. 前端
+# 2. 前端
 cd ../client
 npm install
 npm run dev        # http://localhost:8888
 
-# 4. (可选)预置魔理沙人设问答
+# 3. (可选)预置魔理沙人设问答
 cd ..
 python seed_qa.py  # 插入 39 条预设问答对
 ```
 
 浏览器打开 http://localhost:8888 即可聊天。
+
+> 想用 MySQL/MariaDB?改 `server-py/.env` 里 `DB_TYPE=mysql` 并填 `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`,依赖加上 pymysql,建库后启动自动建表/迁移。
 
 ## API 文档
 
@@ -119,9 +117,9 @@ python seed_qa.py  # 插入 39 条预设问答对
 
 ## 生产部署建议
 
-- 后端:`uvicorn` 建议用 `gunicorn -k uvicorn.workers.UvicornWorker` 多进程(注意:内存倒排索引为进程内态,多进程下各自维护,写入节点需固定;简单场景单进程即可)
+- **存储**:默认 SQLite 单文件,低配服务器(512M 内存)也能跑,无需装数据库;数据文件就是 `server-py/webmarisa.db`,备份=拷走一个文件。多人并发写入场景再考虑 MySQL(`DB_TYPE=mysql`)
+- 后端:`uvicorn` 建议用 `gunicorn -k uvicorn.workers.UvicornWorker` 多进程(注意:内存倒排索引为进程内态,多进程下各自维护,写入节点需固定;简单场景单进程即可,SQLite 也更适合单进程)
 - 前端:`npm run build` 后由 nginx 托管,`/api` 反向代理到后端(见 `client/vite.config.ts` 的 proxy 配置)
-- 数据库:改 `server-py/.env` 或环境变量(`DB_HOST`/`DB_PASSWORD` 等),勿用默认 root 空密码
 
 ## 致谢
 

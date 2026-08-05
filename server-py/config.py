@@ -7,13 +7,15 @@
 import os
 from pathlib import Path
 
-# 默认配置(与 Go 版 Config/config.ini 保持一致;验证阶段端口用 3100,3000 被旧 Go 版占用)
+# 默认配置:SQLite(零依赖、零内存,适合单机/低配部署);如部署 MySQL/MariaDB 可改 DB_TYPE=mysql
 _DEFAULTS = {
-    "HTTP_PORT": "3100",   # 后端监听端口
-    "DB_HOST": "127.0.0.1",
+    "HTTP_PORT": "3000",        # 后端监听端口
+    "DB_TYPE": "sqlite",        # sqlite 或 mysql
+    "DB_FILE": "webmarisa.db",  # SQLite 文件(相对 server-py/ 目录)
+    "DB_HOST": "127.0.0.1",     # mysql 时使用
     "DB_PORT": "3306",
     "DB_USER": "root",
-    "DB_PASSWORD": "",     # 本机 root 空密码
+    "DB_PASSWORD": "",
     "DB_NAME": "webmarisa",
 }
 
@@ -39,11 +41,20 @@ def http_port() -> int:
 
 
 def database_url() -> str:
-    """拼出 SQLAlchemy 连接串(MySQL/MariaDB + pymysql 驱动)。"""
-    return "mysql+pymysql://{user}:{password}@{host}:{port}/{name}?charset=utf8".format(
-        user=get("DB_USER"),
-        password=get("DB_PASSWORD"),
-        host=get("DB_HOST"),
-        port=get("DB_PORT"),
-        name=get("DB_NAME"),
-    )
+    """生成 SQLAlchemy 连接串。
+
+    - DB_TYPE=sqlite(默认):sqlite:///<server-py 目录>/webmarisa.db,零依赖零内存
+    - DB_TYPE=mysql:mysql+pymysql://user:pass@host:port/dbname
+    """
+    if get("DB_TYPE") == "mysql":
+        return "mysql+pymysql://{user}:{password}@{host}:{port}/{name}?charset=utf8".format(
+            user=get("DB_USER"),
+            password=get("DB_PASSWORD"),
+            host=get("DB_HOST"),
+            port=get("DB_PORT"),
+            name=get("DB_NAME"),
+        )
+    db_file = get("DB_FILE")
+    if not os.path.isabs(db_file):
+        db_file = str(Path(__file__).resolve().parent / db_file)
+    return "sqlite:///" + db_file.replace("\\", "/")

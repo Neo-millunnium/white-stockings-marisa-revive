@@ -7,6 +7,7 @@ Thumbs.db
 server-py/.venv/
 server-py/__pycache__/
 server-py/.env
+server-py/*.db
 
 # --- 后端:Go (server/) 二进制 ---
 server/server.exe

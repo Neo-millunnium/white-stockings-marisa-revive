@@ -3,25 +3,29 @@
 web-marisa Python 后端接口验证脚本。
 
 用法:先启动后端(在 server-py 目录下执行)
-    .venv\\Scripts\\python -m uvicorn main:app --host 127.0.0.1 --port 3100
+    .venv\\Scripts\\python -m uvicorn main:app --host 127.0.0.1 --port 3000
 再运行:
     python test_api.py
 
-依赖:仅标准库 urllib + 本机 MariaDB 客户端(用于校验数据库数据)。
+依赖:仅标准库 urllib + SQLAlchemy(直接读 SQLite 文件校验数据)。
 覆盖:探活 / Status / Add 校验 / Reply 命中与未命中 / 子集合并 vs 非子集新增 /
       Forget / 限流(11 次 Add 第 11 次 429)/ 命中随机性 / 数据库数据保留。
 """
 import json
 import os
-import subprocess
 import time
 import urllib.parse
 import urllib.request
 
-# 本机 MariaDB 客户端路径(与 server/test_api.py 一致)
-MYSQL = r"D:\tools\mariadb-10.6.27-winx64\bin\mysql.exe"
+from sqlalchemy import create_engine, text
+
+import config
+
 # 后端地址(正式端口 3000)
 BASE = "http://127.0.0.1:3000"
+
+# 数据库直连(读 SQLite 文件校验,与后端同一文件)
+DB_ENGINE = create_engine(config.database_url())
 
 # 未命中兜底话术(必须与后端一致)
 MISS_ANSWER = "唔嗯...不懂你在说什么呢...教教我吧~"
@@ -56,15 +60,11 @@ failed = 0
 
 
 def sql(query):
-    """执行 SQL(通过 mysql.exe 的 stdin 传入,避免 Windows 命令行编码问题)。"""
-    proc = subprocess.run(
-        [MYSQL, "-h", "127.0.0.1", "-P", "3306", "-u", "root",
-         "--default-character-set=utf8mb4", "-B", "-N", "webmarisa"],
-        input=query.encode("utf-8"), capture_output=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.decode("utf-8", errors="replace"))
-    return proc.stdout.decode("utf-8", errors="replace").strip()
+    """执行 SQL(通过 SQLAlchemy 直连 SQLite,返回首行首列的字符串或空串)。"""
+    with DB_ENGINE.connect() as conn:
+        result = conn.execute(text(query))
+        row = result.fetchone()
+        return str(row[0]) if row else ""
 
 
 def request(method, path, data=None):
