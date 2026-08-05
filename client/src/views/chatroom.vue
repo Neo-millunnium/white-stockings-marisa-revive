@@ -251,11 +251,11 @@ onMounted(() => {
       width: 382px
       height: 24px
       padding-left: 5px
-      background: rgba(255, 255, 255, 0.2)
+      background: #ffffff
       border: 1px solid $border-color
       transition: all 0.2s
       &:hover, &:focus
-        background: rgba(255, 255, 255, 0.6)
+        background: #ffffff
         border-radius: 5px
     & input[type='submit']
       position: relative
@@ -263,7 +263,7 @@ onMounted(() => {
       left: 15px
       width: 48px
       height: 22px
-      background: rgba(255, 255, 255, 0.2)
+      background: #ffffff
       border: 1px solid $border-color
       border-radius: 5px
       font-size: 12px
@@ -299,8 +299,8 @@ onMounted(() => {
     .marisa-cmd
       display: inline
       font-weight: bold
-      font-family: $font-pixel
-      font-size: 11px
+      font-family: sans-serif
+      font-size: 13px
     .cmd_desc
       position: relative
       top: -2px
