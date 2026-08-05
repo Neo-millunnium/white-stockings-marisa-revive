@@ -1,104 +1,99 @@
-import Api from '../api/v1'
-import Tools from '../assets/js/tools'
+// 魔理沙核心逻辑:说话格式、回复、教学、忘记、状态。
+import { api } from '../api'
 
-interface ISpeakConfig {
+/** 一条聊天记录 */
+export interface TalkItem {
   name: string
   content: string
 }
 
-export default class Core {
-  /**
-   * 魔理沙说话格式,以及处理You的说话格式
-   * @param {String} name
-   * @param {String} content
-   */
-  public static speak (name: string, content: string) : Object {
-    let obj: ISpeakConfig = {
-      name: name,
-      content: content
+/**
+ * 获取教学时上报的 ip 参数。
+ * 优先尝试获取外网 IP(与旧版行为一致),失败则回退到本机地址,避免断网时教学不可用。
+ */
+async function getIp(): Promise<string> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 3000)
+    const resp = await fetch('https://ipv4.icanhazip.com/', {
+      signal: controller.signal,
+    })
+    clearTimeout(timer)
+    const text = (await resp.text()).replace(/\s+/g, '')
+    if (text) {
+      return text
     }
-    return obj
+  } catch {
+    // 网络不可用时忽略,走回退地址
   }
+  return '127.0.0.1'
+}
+
+export const Core = {
+  /** 生成一条聊天记录(You 或 白絲魔理沙 的发言) */
+  speak(name: string, content: string): TalkItem {
+    return { name, content }
+  },
 
   /**
-   * 回复逻辑判断中枢
-   * @param {String} content
+   * 回复:命中返回魔理沙的回答;未命中(业务码 10001)或出错返回 undefined,
+   * 由界面显示兜底话术(与旧版前端行为一致)。
    */
-  public static async reply (content: string) : Promise<any> {
-    let config = {
-      keyword: content
-    }
-
+  async reply(content: string): Promise<string | undefined> {
     try {
-      let res = await Api.fecthMemory(config)
-      return res.data.data.answer
+      const res = await api.reply({ keyword: content })
+      if (res.code === 200) {
+        return res.data?.answer
+      }
+      return undefined
     } catch (err) {
       console.log(`回复失败 ... ${err}`)
+      return undefined
     }
-  }
+  },
 
   /**
-   * 学习中枢
-   * @param {String} content
+   * 教学:content 形如 关键词`回答(注意是反引号分隔,产品逻辑必须保留)。
+   * 拆开后在参数里分别传给后端。返回是否学习成功。
    */
-  public static async teach (content: string) : Promise<any> {
-    let str = content.split('`')
-    let realIp: string = await Tools.getIp()
-    let config = {
-      ip: realIp,
-      keyword: str[0],
-      answer: str[1]
-    }
-
+  async teach(content: string): Promise<boolean> {
+    const parts = content.split('`')
+    const keyword = parts[0] || ''
+    const answer = parts[1] || ''
+    const ip = await getIp()
     try {
-      let res = await Api.AddMemory(config)
-      if (res.data.data.code === 200) {
-        return true
-      }
+      const res = await api.add({ ip, keyword, answer })
+      return res.code === 200
     } catch (err) {
       console.log(`无法学习 ... ${err}`)
       return false
     }
-  }
+  },
 
   /**
-   * 记忆消除中枢
-   * @param {Object[]} list
+   * 忘记:根据当前对话列表取"最后一次让魔理沙说出的回答"作为删除依据。
+   * 逻辑与旧版一致:输入 forget 之前的那一条记录就是 last answer。
    */
-  public static async forget (list: any[]) : Promise<any> {
-    let len: number = list.length
-    let answer: string = list[1].content
-
-    if (len > 3)  answer = list[len - 2].content
-
-
-    let config = {
-      answer: answer
-    }
-
+  async forget(list: TalkItem[]): Promise<boolean> {
+    const len = list.length
+    const answer = len > 3 ? list[len - 2].content : list[1]?.content
     try {
-      let res = await Api.DeleteMemoryByAnswer(config)
-      if (res.data.code === 200 && res.data.data === 'success') {
-        return true
-      }
+      const res = await api.forget({ answer })
+      return res.code === 200 && res.data === 'success'
     } catch (err) {
       console.log(`无法忘记 ... ${err}`)
       return false
     }
-  }
+  },
 
-  /**
-   * 记忆重量
-   */
-  public static async status() :Promise<any> {
+  /** 状态:返回当前知识条数,失败返回 0 */
+  async status(): Promise<number> {
     try {
-      let res = await Api.FecthMemoryCount()
-      if (res.data.code === 200 && res.data.hasOwnProperty('data')) {
-        return res.data.data
-      }
+      const res = await api.status()
+      return typeof res.data === 'number' ? res.data : 0
     } catch (err) {
-      console.log(` 重量获取 ... ${err}`)
+      console.log(`重量获取 ... ${err}`)
       return 0
     }
-  }
+  },
 }

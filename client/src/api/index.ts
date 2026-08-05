@@ -1,38 +1,59 @@
-import Axios from 'axios';
+// 后端 API 封装。
+//
+// 后端契约(不能改):全部 POST + form-urlencoded,返回 JSON { code, data }。
+//
+// 请求地址:
+// - 开发环境:走 Vite 代理,请求 /api/xxx 会被转发到 http://127.0.0.1:3000/xxx 并去掉 /api 前缀,无跨域问题;
+// - 生产环境:默认也是相对路径 /api,由反向代理(nginx 等)或后端路由组把 /api 转发到后端;
+//   也可以用环境变量 VITE_API_BASE_URL 覆盖为后端绝对地址(此时后端需要开启 CORS)。
+const BASE_URL: string = import.meta.env.VITE_API_BASE_URL || '/api'
 
-Axios.defaults.timeout = 180000;
-
-interface IConfig {
-  baseURL: string,
-  headers: Object,
+/** 后端统一返回结构 */
+export interface ApiResponse<T = unknown> {
+  code: number
+  data: T
+  message?: string
 }
 
-export default class Api {
-  public static axios(_path: string, _data?: any) {
-    let fromData = new FormData();
-    for (const key in _data) {
-      if (_data.hasOwnProperty(key)) {
-        const element = _data[key];
-        fromData.append(key, element);
-      }
+/**
+ * 统一请求:POST + form-urlencoded(用 URLSearchParams,不要用 JSON body)。
+ */
+async function request<T = unknown>(
+  path: string,
+  data?: Record<string, string>,
+): Promise<ApiResponse<T>> {
+  const body = new URLSearchParams()
+  if (data) {
+    for (const key of Object.keys(data)) {
+      body.append(key, data[key])
     }
-
-    /**
-     * 配置参数
-     */
-    let config: IConfig = {
-      baseURL: 'http://127.0.0.1:3000/',
-      headers: {
-        'cms-channel': 0,
-      },
-    };
-
-    return Axios.request({
-      method: 'POST',
-      baseURL: config.baseURL,
-      url: _path,
-      data: fromData,
-      headers: config.headers,
-    });
   }
+
+  const resp = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: body.toString(),
+  })
+
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`)
+  }
+  return (await resp.json()) as ApiResponse<T>
+}
+
+export const api = {
+  /** 教学:POST /Add,form: ip, keyword, answer */
+  add: (data: { ip: string; keyword: string; answer: string }) =>
+    request<{ ip: string; keyword: string; answer: string }>('/Add', data),
+
+  /** 提问:POST /Reply,form: keyword。命中 code=200;未命中 code=10001(data.answer 为兜底话术) */
+  reply: (data: { keyword: string }) => request<{ answer: string }>('/Reply', data),
+
+  /** 忘记:POST /Forget,form: answer,成功返回 data: "success" */
+  forget: (data: { answer: string }) => request<string>('/Forget', data),
+
+  /** 状态:POST /Status,无参数,data 为知识条数 */
+  status: () => request<number>('/Status'),
 }

@@ -1,59 +1,23 @@
 {
-  "name": "neeee",
-  "version": "0.1.0",
+  "name": "web-marisa-frontend",
+  "version": "0.2.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "serve": "vue-cli-service serve",
-    "build": "vue-cli-service build",
-    "lint": "vue-cli-service lint"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "axios": "^0.18.1",
-    "regenerator-runtime": "^0.14.1",
-    "vue": "2.6.14",
-    "vue-class-component": "^6.0.0",
-    "vue-property-decorator": "^7.0.0",
-    "vue-router": "3.0.7",
-    "vuex": "^3.0.1",
-    "what-is-my-ip-address": "^1.0.3"
+    "vue": "^3.5.13"
   },
   "devDependencies": {
-    "@vue/cli-plugin-babel": "^3.2.0",
-    "@vue/cli-plugin-eslint": "^3.2.1",
-    "@vue/cli-plugin-typescript": "^3.2.0",
-    "@vue/cli-service": "^3.2.0",
-    "@vue/eslint-config-typescript": "^3.2.0",
-    "babel-eslint": "^10.0.1",
-    "eslint": "^5.8.0",
-    "eslint-plugin-vue": "^5.0.0-0",
-    "stylus": "^0.54.5",
-    "stylus-loader": "^3.0.2",
-    "typescript": "^3.0.0",
-    "vue-template-compiler": "2.6.14"
-  },
-  "eslintConfig": {
-    "root": true,
-    "env": {
-      "node": true
-    },
-    "extends": [
-      "plugin:vue/essential",
-      "eslint:recommended",
-      "@vue/typescript"
-    ],
-    "rules": {},
-    "parserOptions": {
-      "parser": "typescript-eslint-parser"
-    }
-  },
-  "postcss": {
-    "plugins": {
-      "autoprefixer": {}
-    }
-  },
-  "browserslist": [
-    "> 1%",
-    "last 2 versions",
-    "not ie <= 8"
-  ]
+    "@types/node": "^22.10.2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "stylus": "^0.64.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vue-tsc": "^2.1.10"
+  }
 }

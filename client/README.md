@@ -1,22 +1,13 @@
-# web-marisa-client
+# web-marisa 前端
 
-## Project setup
-```
-yarn install
-```
+白丝魔理沙聊天室前端。已从 Vue 2 + vue-cli 重写为 **Vue 3 + Vite + TypeScript**。
 
-### Compiles and hot-reloads for development
-```
-yarn serve
-```
+完整说明(启动 dev、构建、后端 CORS 配置、API 契约)见 **[README_FRONTEND.md](./README_FRONTEND.md)**。
 
-### Compiles and minifies for production
-```
-yarn build
-```
+快速开始:
 
-
-### Contact me
-- E-Mail: gutrse3321@live.com
-- QQ: 464189307
-- QQ Group: 795711415
+```bash
+npm install
+npm run dev     # http://127.0.0.1:8888(需先启动后端)
+npm run build   # 产物在 dist/
+```

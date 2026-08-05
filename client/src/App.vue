@@ -1,8 +1,8 @@
 <template>
-  <div id="app">
-    <router-view/>
-  </div>
+  <!-- 单页聊天室:直接渲染聊天室组件,不再需要路由 -->
+  <chatroom />
 </template>
-<style lang="stylus">
-@import '~@/assets/css/index'
-</style>
+
+<script setup lang="ts">
+import Chatroom from './views/chatroom.vue'
+</script>
