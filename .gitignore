@@ -1,0 +1,23 @@
+# --- 通用 ---
+.DS_Store
+Thumbs.db
+*.log
+
+# --- 后端:Python (server-py/) ---
+server-py/.venv/
+server-py/__pycache__/
+server-py/.env
+
+# --- 后端:Go (server/) 二进制 ---
+server/server.exe
+server/*.exe
+
+# --- 前端 (client/) ---
+client/node_modules/
+client/dist/
+client/.env.local
+client/.env.*.local
+
+# --- 测试/临时 ---
+__pycache__/
+*.pyc

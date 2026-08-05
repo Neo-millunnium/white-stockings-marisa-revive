@@ -1,14 +1,122 @@
-# web-marisa
-🍄 白丝魔理沙网页版
+# web-marisa · 白丝魔理沙网页版
 
-### Web(Router) Framework
-- iris(no longer use)
-- gin(in use, please checkout gin branch)
+东方 Project 角色「白丝魔理沙」的网页聊天机器人。一个可教化的"调教型"关键词检索机器人:
+用户用 `关键词`回答` 的格式教它说话,它记住后,别人提问命中关键词就返回对应回答。
 
-### Status
-🔋 is running
+> 🍄 这个项目的机制最早可以追溯到 2011 年的 QQ 调教 bot(原始版本已失传)。
+> 本仓库是 2018-2019 年的网页版复刻,2026 年经本地现代化重构后重新开源。
 
-### Contact me
-- E-Mail: gutrse3321@live.com
-- QQ: 464189307
-- QQ Group: 795711415
+---
+
+## 它是什么
+
+- **不是 AI** —— 没有模型、没有生成式回复。核心是一个关键词匹配的检索式聊天机器人
+- **知识来自用户** —— 你教它什么,它就会什么。教得越多越"聪明"
+- **指令系统**(仿 2011 年 QQ 调教 bot):
+  - `teach` 进入教学模式,然后输入 `关键词`回答`(反引号分隔)
+  - `forget` 忘记最后教的回答
+  - `status` 查看当前掌握的知识条数
+
+## 工作原理
+
+```
+教学:  用户输入 "你好`你好呀,我是白丝魔理沙!"(前端拆分后 POST /Add)
+       └─ 后端 jieba 分词 -> 去重合并 -> 存 MySQL(memorise 表)
+
+提问:  用户输入 "你好"(POST /Reply)
+       └─ 1. raw_keyword 精确匹配优先
+          ├─ 2. jieba 分词,查内存倒排索引
+          ├─ 3. 与已有词条算分词重合度,>= 40% 命中
+          └─ 4. 命中多条随机选一条;全不中返回兜底话术
+```
+
+详细流程见 `server-py/service.py`(代码注释详尽)。
+
+## 技术栈
+
+| 层 | 技术 |
+|----|------|
+| 后端 | Python 3.11 · FastAPI · SQLAlchemy 2 · pymysql · jieba 分词 |
+| 前端 | Vue 3.5 · Vite 8 · TypeScript 5 · Sass |
+| 数据库 | MariaDB 11.4(MySQL 5.7+ 兼容) |
+
+## 目录结构
+
+```
+web-marisa/
+├── server-py/          # Python 后端(FastAPI)
+│   ├── main.py         # 入口:FastAPI + 路由
+│   ├── service.py      # 业务逻辑:分词/匹配/合并/限流
+│   ├── database.py     # SQLAlchemy 引擎 + 启动迁移
+│   ├── models.py       # ORM 模型
+│   ├── config.py       # 配置(.env / 环境变量 / 默认值)
+│   └── test_api.py     # 接口测试(29 项)
+├── client/             # 前端(Vue 3 + Vite)
+│   └── src/            # 聊天室界面、API 封装、样式
+├── server/             # 旧 Go 版后端(保留参考,已弃用)
+└── seed_qa.py          # 预置魔理沙人设问答对(39 条)
+```
+
+## 快速开始(本地开发)
+
+依赖:Python 3.11+、Node 18+、MariaDB/MySQL(建议 11.4)
+
+```bash
+# 1. 数据库:建库
+mysql -u root -e "CREATE DATABASE webmarisa DEFAULT CHARACTER SET utf8mb4;"
+
+# 2. 后端
+cd server-py
+uv venv && uv pip install fastapi uvicorn sqlalchemy pymysql jieba
+#   首次启动会自动建表/补列(见 database.py)
+uv run python -m uvicorn main:app --host 127.0.0.1 --port 3000
+
+# 3. 前端
+cd ../client
+npm install
+npm run dev        # http://localhost:8888
+
+# 4. (可选)预置魔理沙人设问答
+cd ..
+python seed_qa.py  # 插入 39 条预设问答对
+```
+
+浏览器打开 http://localhost:8888 即可聊天。
+
+## API 文档
+
+全部接口:POST + form-urlencoded,返回 JSON `{code, data}`(HTTP 状态恒为 200,业务码在 JSON 里):
+
+| 接口 | 参数 | 说明 | 返回 |
+|------|------|------|------|
+| `POST /Add` | `ip`, `keyword`, `answer` | 教学(分词入库,子集合并) | `{code:200, data:{ip, keyword, answer}}` |
+| `POST /Reply` | `keyword` | 提问(精确匹配优先 → 分词命中 ≥40% 随机选) | 命中 `{code:200, data:{answer}}` / 未命中 `{code:10001, data:{answer:兜底话术}}` |
+| `POST /Forget` | `answer` | 按回答删除 | `{code:200, data:"success"}` |
+| `POST /Status` | — | 知识条数 | `{code:200, data:整数}` |
+| `GET/POST /` | — | 探活 | `{code:200, message:"hello Marisa~"}` |
+
+业务码:`200` 成功、`400` 参数不合法、`429` 教学过于频繁(每 IP 每分钟 10 次)、`10001` 未命中。
+
+## 特性
+
+- 内存倒排索引(分词 → 记忆),回复不走全表扫描
+- 输入校验(关键词 ≤50 字、回答 ≤500 字,非空)
+- 每 IP 教学限流(每分钟 10 次)
+- 命中计数 `hit_count`、最近未命中关键词记录(内存,重启清空)
+- 存储型 XSS 防护(前端消息纯文本渲染,`v-text`)
+
+## 生产部署建议
+
+- 后端:`uvicorn` 建议用 `gunicorn -k uvicorn.workers.UvicornWorker` 多进程(注意:内存倒排索引为进程内态,多进程下各自维护,写入节点需固定;简单场景单进程即可)
+- 前端:`npm run build` 后由 nginx 托管,`/api` 反向代理到后端(见 `client/vite.config.ts` 的 proxy 配置)
+- 数据库:改 `server-py/.env` 或环境变量(`DB_HOST`/`DB_PASSWORD` 等),勿用默认 root 空密码
+
+## 致谢
+
+- 原始网页版作者:gutrse3321(Tomonori)2018-2019
+- 2011 年原始调教 bot 作者:已不可考,感谢那个年代的所有调教 bot 玩家
+- 东方 Project © ZUN / 上海爱丽丝幻乐团
+
+## License
+
+MIT(见各子目录 LICENSE 说明;原始网页版未声明许可证,仅保留学习交流用途)
