@@ -44,6 +44,26 @@ GREETING_WORDS = (
     "拜拜", "再见", "谢谢", "多谢", "感谢", "辛苦了", "hey",
 )
 
+# 各教学分类的回复命中重合度阈值(分类影响匹配灵敏度):
+# - word 词汇:0.4 最严谨(与旧版一致)
+# - sentence 句型:0.3 放宽——教的是"完整句子",沾边就答
+# - logic 逻辑:0.2 最灵敏——"提到关键词就答"的条件式记忆
+# - syntax 文法:0.4 但先忽略虚词——教的是句子结构,语气词不干扰匹配
+# - greeting 问候语:0.4 + 精确匹配优先(见 reply)
+# 未分类(unclassified/旧数据)保持 0.4,行为与旧版完全一致
+CATEGORY_THRESHOLDS = {
+    "word": 0.4,
+    "sentence": 0.3,
+    "syntax": 0.4,
+    "logic": 0.2,
+    "greeting": 0.4,
+    "": 0.4,
+}
+# 语气助词/结构虚词:syntax 文法类匹配时从分词里剔除(教的"结构"不受语气词干扰)
+SYNTAX_STOPWORDS = frozenset(
+    "的 地 得 了 着 过 吗 呢 啊 吧 呀 嘛 哦 哈 啦 哟 呗 么".split()
+)
+
 # ---- 深夜催睡(产品逻辑,勿删)----
 # 凌晨 3:50 ~ 6:00 之间不回复正常内容,只输出固定催睡话术(与"2010 年调教 bot"同款玩法)
 SLEEP_START = (3, 50)        # (时, 分) 催睡开始
@@ -181,10 +201,18 @@ def cut_keyword(keyword):
     return list(dict.fromkeys(jieba.lcut(keyword)))
 
 
-def overlap_ratio(existing_tokens, input_tokens):
-    """重合度 = 已有词条分词中出现在输入分词里的比例(与 Go 版 overlapRatio 一致)。"""
+def overlap_ratio(existing_tokens, input_tokens, stopwords=None):
+    """重合度 = 已有词条分词中出现在输入分词里的比例(与 Go 版 overlapRatio 一致)。
+
+    stopwords 非空时(syntax 文法类)先从两侧剔除虚词再计算,语气词不干扰结构匹配。
+    """
     if not existing_tokens:
         return 0.0
+    if stopwords:
+        existing_tokens = [t for t in existing_tokens if t not in stopwords]
+        input_tokens = [t for t in input_tokens if t not in stopwords]
+        if not existing_tokens:
+            return 0.0
     input_set = set(input_tokens)
     matched = sum(1 for t in existing_tokens if t in input_set)
     return matched / len(existing_tokens)
@@ -376,10 +404,15 @@ class MemoriseService:
             self._bump_hit(chosen)
             return {"code": 200, "data": {"answer": chosen.answer}}
         # 2. 分词后查倒排索引,收集重合度达到阈值的候选
+        #    阈值按词条分类动态取:word 0.4 / sentence 0.3 / logic 0.2 /
+        #    syntax 0.4(去虚词后算)/ greeting 0.4(另有精确匹配优先)
         tokens = cut_keyword(kw) or [kw]
         candidates = []
         for entry in self.index.search(tokens):
-            if overlap_ratio(entry.tokens, tokens) >= REPLY_THRESHOLD:
+            cat = entry.category or ""
+            threshold = CATEGORY_THRESHOLDS.get(cat, 0.4)
+            stopwords = SYNTAX_STOPWORDS if cat == "syntax" else None
+            if overlap_ratio(entry.tokens, tokens, stopwords) >= threshold:
                 candidates.append(entry)
         # 3. 未命中:记录最近未命中的关键词(内存,最多 50 条),返回兜底话术
         if not candidates:
