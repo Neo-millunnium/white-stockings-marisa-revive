@@ -26,6 +26,9 @@ class Memorise(Base):
     updated_at = Column("updated_at", DateTime, nullable=True)            # 更新时间
     # AI 审核状态:pending=待审核 approved=已通过 rejected=已拒绝(仅 SQLite/MySQL 新列,旧数据 NULL 视为 approved)
     review_status = Column("review_status", String(16), nullable=True, default="pending")
+    # 教学分类(源自 2010 年原始 QQ 调教 bot 的 teach 指令体系):
+    # word/sentence/syntax/logic/greeting;NULL 或 auto 判定后落值,旧数据 NULL 视为未分类
+    category = Column("category", String(16), nullable=True)
 
 
 class Blacklist(Base):

@@ -29,6 +29,7 @@ _ADD_COLUMNS = {
     "created_at": "ALTER TABLE memorise ADD COLUMN created_at DATETIME NULL",
     "updated_at": "ALTER TABLE memorise ADD COLUMN updated_at DATETIME NULL",
     "review_status": "ALTER TABLE memorise ADD COLUMN review_status VARCHAR(16) NULL DEFAULT 'pending'",
+    "category": "ALTER TABLE memorise ADD COLUMN category VARCHAR(16) NULL",
 }
 
 

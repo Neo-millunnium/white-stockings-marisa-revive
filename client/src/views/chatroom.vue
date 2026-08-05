@@ -26,7 +26,7 @@
         <div class="cmd">
           <span class="system-cmd">系统级指令快速说明——</span>
           <span class="system-cmd cmd-collect">
-            <span class="marisa-cmd">teach</span>&nbsp;进入内容教学模式
+            <span class="marisa-cmd">teach</span>&nbsp;教学(teach word/sentence/syntax/logic/greeting 分类,auto 自动)
           </span>
           <span class="system-cmd cmd-collect">
             <span class="marisa-cmd">forget</span>&nbsp;忘记最后所说的内容
@@ -68,6 +68,19 @@ let cmdFlag = 0
 let teachFlag = 0
 // 教学过程中收集的关键词 / 回答
 let teachContent: string[] = []
+// 当前教学分类(teach word / sentence / syntax / logic / greeting / auto,默认 auto 自动判断)
+let teachCategory = 'auto'
+
+// 教学分类的中文名(与后端 TEACH_CATEGORIES 对应)
+const CATEGORY_LABELS: Record<string, string> = {
+  word: '词汇',
+  sentence: '句型',
+  syntax: '文法',
+  logic: '逻辑',
+  greeting: '问候语',
+  auto: '自动',
+  unclassified: '未分类',
+}
 
 /**
  * 发送消息:回车或点击发送按钮触发。
@@ -91,12 +104,13 @@ async function sendMessage() {
 
 /** 普通对话模式:识别 teach / forget / status / hint 指令,否则交给魔理沙回复 */
 async function marisaThinking(content: string) {
+  // teach 支持分类:teach / teach word / teach word 关键词 / teach auto ...
+  const teachMatch = content.match(/^teach(?:\s+(word|sentence|syntax|logic|greeting|auto))?(?:\s+(.+))?$/i)
+  if (teachMatch) {
+    await startTeach((teachMatch[1] ?? 'auto').toLowerCase(), (teachMatch[2] ?? '').trim())
+    return
+  }
   switch (content) {
-    case 'teach':
-      talkList.value.push(Core.speak(MARISA, '要教给魔里沙什么 ..? 现在只能学习语句.. 如"问和答" .. 中止教学输入 exit ..'))
-      talkList.value.push(Core.speak(MARISA, '（ < ゝω·）教学模式启动 ！'))
-      cmdFlag = 1
-      break
     case 'forget':
       await marisaForget()
       break
@@ -108,6 +122,26 @@ async function marisaThinking(content: string) {
       break
     default:
       await marisaReply(content)
+  }
+}
+
+/** 启动教学模式:category 指定分类,keyword 非空时直接作为第一轮输入(teach word 关键词 用法) */
+async function startTeach(category: string, keyword: string) {
+  teachCategory = category
+  const catLabel = CATEGORY_LABELS[category] ?? category
+  talkList.value.push(
+    Core.speak(
+      MARISA,
+      `要教给魔里沙什么 ..? 教学分类:${catLabel}(${category})。也可用 teach word/sentence/syntax/logic/greeting 指定分类,不确定就 teach auto 自动判断。中止教学输入 exit ..`,
+    ),
+  )
+  talkList.value.push(Core.speak(MARISA, '（ < ゝω·）教学模式启动 ！'))
+  cmdFlag = 1
+  if (keyword) {
+    // teach word 关键词:直接进入第一轮(关键词已给出),下一轮输入回答
+    teachFlag = 1
+    teachContent = [keyword]
+    talkList.value.push(Core.speak(MARISA, '那么 ... 在这样的情况下该如何回答呢 ..?'))
   }
 }
 
@@ -127,14 +161,15 @@ async function teachMarisa(content: string) {
   teachFlag++
   teachContent.push(content)
 
-  // 收集到"关键词 + 回答"后,交给教学逻辑
+  // 收集到"关键词 + 回答"后,交给教学逻辑(携带当前教学分类)
   if (teachFlag > 1) {
     const query = teachContent.join('`')
-    const ok = await Core.teach(query)
+    const ok = await Core.teach(query, teachCategory)
     talkList.value.push(Core.speak(MARISA, ok ? '行，我知道了' : '魔理沙不想记住 . . . . . . 对不起'))
     cmdFlag = 0
     teachFlag = 0
     teachContent = []
+    teachCategory = 'auto'
   }
 }
 
@@ -156,8 +191,20 @@ async function marisaForget() {
 async function marisaStatus() {
   const weight = await Core.status()
   if (weight) {
+    // 分类明细:只展示有内容的分类,如(问候语 5 条、词汇 12 条)
+    let detail = ''
+    const cats = await Core.categories()
+    if (cats) {
+      const parts = Object.entries(cats)
+        .filter(([, n]) => n > 0)
+        .map(([k, n]) => `${CATEGORY_LABELS[k] ?? k} ${n} 条`)
+      if (parts.length) detail = `（${parts.join('、')}）`
+    }
     talkList.value.push(
-      Core.speak(MARISA, `目前魔理沙的脑重量是 ${weight} 克。如果我现在还不能理解您的意思的话，请教给我更多的知识，我会非常非常用心学习的～`),
+      Core.speak(
+        MARISA,
+        `目前魔理沙的脑重量是 ${weight} 克${detail}。如果我现在还不能理解您的意思的话，请教给我更多的知识，我会非常非常用心学习的～`,
+      ),
     )
   } else {
     talkList.value.push(Core.speak(MARISA, '我的记忆要一片混乱了 ...'))

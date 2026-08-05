@@ -44,9 +44,9 @@ async function request<T = unknown>(
 }
 
 export const api = {
-  /** 教学:POST /Add,form: ip, keyword, answer */
-  add: (data: { ip: string; keyword: string; answer: string }) =>
-    request<{ ip: string; keyword: string; answer: string }>('/Add', data),
+  /** 教学:POST /Add,form: ip, keyword, answer, category(默认 auto 自动判定) */
+  add: (data: { ip: string; keyword: string; answer: string; category?: string }) =>
+    request<{ ip: string; keyword: string; answer: string; category: string }>('/Add', data),
 
   /** 提问:POST /Reply,form: ip, keyword。命中 code=200;未命中 code=10001(data.answer 为兜底话术);限流 code=429 */
   reply: (data: { ip: string; keyword: string }) => request<{ answer: string }>('/Reply', data),
@@ -56,6 +56,10 @@ export const api = {
 
   /** 状态:POST /Status,无参数,data 为知识条数 */
   status: () => request<number>('/Status'),
+
+  /** 分类统计:POST /Categories,data 为 {word, sentence, syntax, logic, greeting, unclassified} */
+  categories: () =>
+    request<Record<string, number>>('/Categories'),
 
   /** 提示线索:POST /Hint,无参数,data 为 {keyword, answer} 随机一条 */
   hint: () => request<{ keyword: string; answer: string }>('/Hint'),

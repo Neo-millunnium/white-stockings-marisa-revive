@@ -54,16 +54,16 @@ export const Core = {
   },
 
   /**
-   * 教学:content 形如 关键词`回答(注意是反引号分隔,产品逻辑必须保留)。
-   * 拆开后在参数里分别传给后端。返回是否学习成功。
+   * 教学:content 形如 "关键词`回答"(反引号分隔,产品逻辑必须保留),
+   * category 为教学分类(word/sentence/syntax/logic/greeting/auto,默认 auto)。返回是否学习成功。
    */
-  async teach(content: string): Promise<boolean> {
+  async teach(content: string, category = 'auto'): Promise<boolean> {
     const parts = content.split('`')
     const keyword = parts[0] || ''
     const answer = parts[1] || ''
     const ip = await getIp()
     try {
-      const res = await api.add({ ip, keyword, answer })
+      const res = await api.add({ ip, keyword, answer, category })
       return res.code === 200
     } catch (err) {
       console.log(`无法学习 ... ${err}`)
@@ -95,6 +95,17 @@ export const Core = {
     } catch (err) {
       console.log(`重量获取 ... ${err}`)
       return 0
+    }
+  },
+
+  /** 分类统计:返回 {word, sentence, syntax, logic, greeting, unclassified},失败返回 null */
+  async categories(): Promise<Record<string, number> | null> {
+    try {
+      const res = await api.categories()
+      return res.code === 200 && res.data ? res.data : null
+    } catch (err) {
+      console.log(`分类统计 ... ${err}`)
+      return null
     }
   },
 

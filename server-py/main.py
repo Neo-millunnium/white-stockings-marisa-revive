@@ -78,9 +78,12 @@ def index():
 
 
 @app.post("/Add")
-def add(ip: str = Form(""), keyword: str = Form(""), answer: str = Form("")):
-    """教学:接收 form 字段 ip/keyword/answer,返回 {code, data}。"""
-    return svc.add(ip, keyword, answer)
+def add(ip: str = Form(""), keyword: str = Form(""), answer: str = Form(""), category: str = Form("auto")):
+    """教学:接收 form 字段 ip/keyword/answer/category,返回 {code, data}。
+
+    category:word/sentence/syntax/logic/greeting/auto(默认 auto,自动判定)。
+    """
+    return svc.add(ip, keyword, answer, category)
 
 
 @app.post("/Reply")
@@ -100,8 +103,14 @@ def forget(answer: str = Form("")):
 
 @app.post("/Status")
 def status():
-    """状态:返回当前记忆总条数。"""
+    """状态:返回 {code, data},data 为知识条数(int,契约不变)。"""
     return svc.status()
+
+
+@app.post("/Categories")
+def categories():
+    """分类统计:返回 {code, data:{word, sentence, syntax, logic, greeting, unclassified}}。"""
+    return svc.categories()
 
 
 @app.post("/Hint")

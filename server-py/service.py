@@ -33,6 +33,17 @@ REPLY_RATE_LIMIT = 30        # 每 IP 每分钟最多回复次数
 RATE_WINDOW = 60             # 限流时间窗口(秒)
 MISS_LOG_MAX = 50            # 内存中保留的最近未命中关键词条数
 
+# ---- 教学分类(源自 2010 年原始 QQ 调教 bot 的 teach 指令体系)----
+# 原版玩法:teach word / teach sentence / teach syntax / teach logic / teach greeting 分门别类教学,
+# teach auto 自动判定分类,exit 中止教学。网页版(iris/gin/1.0.0 分支)已简化掉分类,此处按原版语义恢复。
+TEACH_CATEGORIES = ("word", "sentence", "syntax", "logic", "greeting", "auto")
+# 问候词表:teach auto 自动归类为 greeting 的命中词(原始关键词或任一分词命中即算)
+GREETING_WORDS = (
+    "你好", "您好", "hello", "hi", "嗨", "哈喽", "在吗", "在不在", "在不",
+    "早安", "早上好", "晚安", "晚上好", "好久不见", "新年好", "新年快乐",
+    "拜拜", "再见", "谢谢", "多谢", "感谢", "辛苦了", "hey",
+)
+
 # ---- 深夜催睡(产品逻辑,勿删)----
 # 凌晨 3:50 ~ 6:00 之间不回复正常内容,只输出固定催睡话术(与"2010 年调教 bot"同款玩法)
 SLEEP_START = (3, 50)        # (时, 分) 催睡开始
@@ -89,6 +100,7 @@ class MemoryEntry:
     raw_keyword: str    # 用户教学时的原始关键词(精确匹配用)
     hit_count: int = 0
     review_status: str = "pending"  # pending/approved/rejected(旧数据 NULL 视为 approved)
+    category: str = ""  # 教学分类 word/sentence/syntax/logic/greeting(旧数据 NULL 视为未分类)
 
 
 class MemoryIndex:
@@ -114,12 +126,12 @@ class MemoryIndex:
 
     @staticmethod
     def _to_entry(row):
-        """把 ORM 行转成内存条目;旧数据的 raw_keyword/hit_count/review_status 可能为 NULL,做兜底。"""
+        """把 ORM 行转成内存条目;旧数据的 raw_keyword/hit_count/review_status/category 可能为 NULL,做兜底。"""
         raw = row.raw_keyword or ""
         hits = row.hit_count or 0
         status = row.review_status or "approved"  # 旧数据无审核列,视为已通过
         tokens = split_keyword(row.keyword) if row.keyword else []
-        return MemoryEntry(row.memory_id, tokens, row.answer or "", raw, hits, status)
+        return MemoryEntry(row.memory_id, tokens, row.answer or "", raw, hits, status, row.category or "")
 
     def add(self, entry):
         """教学后增量加入索引。"""
@@ -189,6 +201,20 @@ def in_sleep_window(now=None):
     return SLEEP_START <= cur < SLEEP_END
 
 
+def detect_category(raw_keyword, tokens):
+    """teach auto 的自动分类:原始关键词或任一分词命中问候词表 -> greeting,否则 -> word。
+
+    其余分类(word/sentence/syntax/logic)机器无法可靠区分,auto 只做二选一,与 2010 原版\"不确定就 teach auto\"的语义一致。
+    """
+    text = (raw_keyword or "").strip().lower()
+    toks = [t.lower() for t in (tokens or [])]
+    for w in GREETING_WORDS:
+        wl = w.lower()
+        if wl in text or wl in toks:
+            return "greeting"
+    return "word"
+
+
 class MemoriseService:
     """记忆服务:对 HTTP 层提供 Add/Reply/Forget/Status。"""
 
@@ -243,8 +269,11 @@ class MemoriseService:
         return self._check_rate_limit(ip, self._reply_logs, REPLY_RATE_LIMIT)
 
     # ---- 教学 ----
-    def add(self, ip, keyword, answer):
-        """教学:限流 -> 校验 -> 分词 -> 子集合并或新增 -> 入库并更新索引。"""
+    def add(self, ip, keyword, answer, category="auto"):
+        """教学:限流 -> 校验 -> 分词 -> 子集合并或新增 -> 入库并更新索引。
+
+        category:word/sentence/syntax/logic/greeting/auto(auto 由问候词表自动判定)。
+        """
         # 深夜催睡:凌晨 3:50 ~ 6:00 之间不接受教学(与 Reply 拦截一致)
         if in_sleep_window():
             return {"code": 400, "data": SLEEP_ANSWER}
@@ -262,6 +291,10 @@ class MemoriseService:
             return {"code": 400, "data": "参数不合法:回答不能为空"}
         if len(ans) > ANSWER_MAX_LEN:
             return {"code": 400, "data": "参数不合法:回答长度不能超过%d" % ANSWER_MAX_LEN}
+        # 2.5 教学分类校验:teach word/sentence/syntax/logic/greeting/auto;不合法直接拒绝
+        cat = (category or "auto").strip().lower()
+        if cat not in TEACH_CATEGORIES:
+            return {"code": 400, "data": "教学分类不合法,可选:word/sentence/syntax/logic/greeting/auto"}
         # 3. 黑名单检查:该回答曾被 AI 审核拒绝过,直接拒绝教学(防止同一句违规反复提交)
         if ans in self.blacklist:
             return {"code": 400, "data": "这个回答好像不太妙,魔理沙拒绝记住它~"}
@@ -280,6 +313,8 @@ class MemoriseService:
             return {"code": 400, "data": "这个回答好像不太妙,魔理沙拒绝记住它~"}
         # 4. 分词(有序去重);分词结果为空时用原始关键词兜底
         tokens = cut_keyword(kw) or [kw]
+        # 4.5 分类落值:auto 由问候词表自动判定(命中 -> greeting,否则 -> word)
+        resolved_cat = detect_category(kw, tokens) if cat == "auto" else cat
         # 5. 合并逻辑改进(修复原 bug):仅当新分词集合完全包含于某条已有记忆的分词集合(子集)时才合并;
         #    合并后的 keyword 为"已有词条 + 新词"的有序去重;否则新增一条记忆。
         stored_tokens = tokens
@@ -302,6 +337,7 @@ class MemoriseService:
                 created_at=now,
                 updated_at=now,
                 review_status="pending",
+                category=resolved_cat,
             )
             session.add(row)
             session.commit()
@@ -313,6 +349,7 @@ class MemoriseService:
                     "ip": ip or "",
                     "keyword": ",".join(stored_tokens),
                     "answer": ans,
+                    "category": resolved_cat,
                 },
             }
         finally:
@@ -334,7 +371,8 @@ class MemoriseService:
         # 1. 精确匹配优先:raw_keyword 与输入完全相等时直接返回该条(权重最高)
         exact = [e for e in self.index.all_entries() if e.raw_keyword and e.raw_keyword == kw]
         if exact:
-            chosen = max(exact, key=lambda e: e.memory_id)  # 多条时取最新一条
+            # 多条时:greeting 分类优先(问候场景最先应答),同分类取最新一条
+            chosen = max(exact, key=lambda e: (e.category == "greeting", e.memory_id))
             self._bump_hit(chosen)
             return {"code": 200, "data": {"answer": chosen.answer}}
         # 2. 分词后查倒排索引,收集重合度达到阈值的候选
@@ -393,6 +431,19 @@ class MemoriseService:
     def status(self):
         """返回当前记忆总条数。"""
         return {"code": 200, "data": self.index.count()}
+
+    # ---- 分类统计 ----
+    def categories(self):
+        """各教学分类的记忆条数(仅已生效的 approved 索引),旧数据无分类计为 unclassified。"""
+        stats = {c: 0 for c in ("word", "sentence", "syntax", "logic", "greeting")}
+        stats["unclassified"] = 0
+        for e in self.index.all_entries():
+            cat = e.category or ""
+            if cat in stats:
+                stats[cat] += 1
+            else:
+                stats["unclassified"] += 1
+        return {"code": 200, "data": stats}
 
     # ---- hint 提示线索 ----
     def hint(self):
@@ -460,7 +511,7 @@ class MemoriseService:
                     tokens = split_keyword(row.keyword) if row.keyword else []
                     self.index.add(MemoryEntry(
                         row.memory_id, tokens, row.answer or "",
-                        row.raw_keyword or "", row.hit_count or 0, "approved",
+                        row.raw_keyword or "", row.hit_count or 0, "approved", row.category or "",
                     ))
                 reviewed += 1
             session.commit()
