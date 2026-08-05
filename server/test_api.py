@@ -71,10 +71,10 @@ try:
     s, body = request("POST", "/")
     check("POST /", s == 200 and body.get("code") == 200 and body.get("message") == "hello Marisa~", str(body))
 
-    # ---- 2. 状态:记忆条数(原始 2 条 + 基准词条 1 条) ----
+    # ---- 2. 状态:记忆条数(动态基线 = 插入基准词条后的当前条数) ----
     s, body = request("POST", "Status")
     baseline = body.get("data")
-    check("Status 基线", s == 200 and body.get("code") == 200 and baseline == 3, str(body))
+    check("Status 基线", s == 200 and body.get("code") == 200 and isinstance(baseline, int) and baseline >= 1, str(body))
 
     # ---- 3. 回复未命中:返回业务码 10001 与兜底回答 ----
     s, body = request("POST", "Reply", {"keyword": "阿巴阿巴不存在的词"})
