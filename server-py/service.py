@@ -13,6 +13,7 @@ import random
 import re
 import threading
 import time
+import hashlib
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,6 +33,14 @@ ADD_RATE_LIMIT = 10          # 每 IP 每分钟最多教学次数
 REPLY_RATE_LIMIT = 30        # 每 IP 每分钟最多回复次数
 RATE_WINDOW = 60             # 限流时间窗口(秒)
 MISS_LOG_MAX = 50            # 内存中保留的最近未命中关键词条数
+# ---- 防分布式注入(换 IP 多来源攻击)----
+GLOBAL_ADD_RATE_LIMIT = 100      # 全站教学合计:每分钟最多 100 次(防多 IP 打爆审核队列)
+ANSWER_FP_WINDOW = 600           # 回答内容指纹统计窗口(秒)= 10 分钟
+ANSWER_FP_MAX_IPS = 5            # 同一回答指纹窗口内被 >=5 个不同 IP 提交即拒绝(防批量刷库)
+ANSWER_FP_MAX_TOTAL = 20         # 同一回答指纹窗口内总提交 >=20 也拒绝(防单 IP 换关键词刷)
+IP_REJECT_BAN_WINDOW = 1800      # IP 信誉统计窗口(秒)= 30 分钟
+IP_REJECT_BAN_THRESHOLD = 5      # 窗口内教学被拒 >=5 次
+IP_OK_MIN = 3                    # 且教学成功 <3 次 -> 临时拉黑该 IP 教学
 
 # ---- 教学分类(源自 2010 年原始 QQ 调教 bot 的 teach 指令体系)----
 # 原版玩法:teach word / teach sentence / teach syntax / teach logic / teach greeting 分门别类教学,
@@ -252,6 +261,12 @@ class MemoriseService:
         self._add_logs = defaultdict(deque)
         self._reply_logs = defaultdict(deque)
         self._rate_lock = threading.Lock()
+        # ---- 防分布式注入状态(均仅内存,重启清零)----
+        self._add_global_logs = deque()          # 全站教学合计时间戳队列
+        self._answer_fps = {}                     # 回答指纹 -> deque[(ts, ip)]
+        self._ip_ok = defaultdict(int)            # IP -> 窗口内教学成功次数
+        self._ip_rejects = defaultdict(deque)     # IP -> deque[被拒时间戳]
+        self._ip_bans = {}                        # IP -> ban 到期时间戳
         # 最近未命中的输入 (时间, 关键词),最多保留 50 条,仅内存不落库。
         # 后续可基于它做"待学习清单",当前不需要暴露接口。
         self.recent_misses = deque(maxlen=MISS_LOG_MAX)
@@ -296,6 +311,72 @@ class MemoriseService:
         """回复限流:每 IP 每分钟最多 REPLY_RATE_LIMIT 次。"""
         return self._check_rate_limit(ip, self._reply_logs, REPLY_RATE_LIMIT)
 
+    # ---- 防分布式注入(全局限流 / 内容指纹 / IP 信誉)----
+    @staticmethod
+    def _fp_of_answer(ans):
+        """回答内容指纹:归一化(去空白/标点/转小写)后 sha256。"""
+        norm = re.sub(r"[\s\W_]+", "", ans, flags=re.UNICODE).lower()
+        return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+
+    def _check_global_add_rate(self):
+        """全局教学限流:全站所有来源合计每分钟 <= GLOBAL_ADD_RATE_LIMIT 次。"""
+        now = time.time()
+        with self._rate_lock:
+            q = self._add_global_logs
+            while q and now - q[0] >= RATE_WINDOW:
+                q.popleft()
+            if len(q) >= GLOBAL_ADD_RATE_LIMIT:
+                return False
+            q.append(now)
+            return True
+
+    def _check_answer_fp(self, ip, ans):
+        """回答内容指纹去重:窗口内同一指纹被过多不同 IP / 总次数提交 -> 拒绝。
+
+        返回 (是否放行, 指纹)。
+        """
+        fp = self._fp_of_answer(ans)
+        now = time.time()
+        with self._rate_lock:
+            q = self._answer_fps.get(fp)
+            if q is None:
+                self._answer_fps[fp] = deque([(now, ip)])
+                return True, fp
+            while q and now - q[0][0] >= ANSWER_FP_WINDOW:
+                q.popleft()
+            ips = {p for _, p in q}
+            if len(ips) >= ANSWER_FP_MAX_IPS or len(q) >= ANSWER_FP_MAX_TOTAL:
+                return False, fp
+            q.append((now, ip))
+            return True, fp
+
+    def _record_reject(self, ip):
+        """记录一次教学拒绝(用于 IP 信誉)。"""
+        now = time.time()
+        with self._rate_lock:
+            q = self._ip_rejects[ip]
+            while q and now - q[0] >= IP_REJECT_BAN_WINDOW:
+                q.popleft()
+            q.append(now)
+
+    def _check_ip_ban(self, ip):
+        """IP 信誉:窗口内被拒多且成功少 -> 临时拉黑教学。
+
+        返回 (是否放行, ban 到期时间戳)。
+        """
+        now = time.time()
+        with self._rate_lock:
+            until = self._ip_bans.get(ip, 0)
+            if until > now:
+                return False, until
+            q = self._ip_rejects[ip]
+            while q and now - q[0] >= IP_REJECT_BAN_WINDOW:
+                q.popleft()
+            if len(q) >= IP_REJECT_BAN_THRESHOLD and self._ip_ok.get(ip, 0) < IP_OK_MIN:
+                self._ip_bans[ip] = now + IP_REJECT_BAN_WINDOW
+                return False, now + IP_REJECT_BAN_WINDOW
+            return True, 0
+
     # ---- 教学 ----
     def add(self, ip, keyword, answer, category="auto"):
         """教学:限流 -> 校验 -> 分词 -> 子集合并或新增 -> 入库并更新索引。
@@ -307,6 +388,13 @@ class MemoriseService:
             return {"code": 400, "data": SLEEP_ANSWER}
         # 1. 防滥用限流(每 IP 每分钟最多 ADD_RATE_LIMIT 次)
         if not self._check_add_rate(ip or ""):
+            return {"code": 429, "data": "教学太频繁了,休息一下吧~"}
+        # 1.5 全局教学限流(全站合计,防多 IP 分布式注入打爆审核队列)
+        if not self._check_global_add_rate():
+            return {"code": 429, "data": "教学太频繁了,休息一下吧~"}
+        # 1.6 IP 信誉:教学被拒率高且成功少的 IP 临时拉黑
+        ok_ip, _until = self._check_ip_ban(ip or "")
+        if not ok_ip:
             return {"code": 429, "data": "教学太频繁了,休息一下吧~"}
         # 2.5 教学分类校验:teach word/sentence/syntax/logic/greeting/auto;不合法直接拒绝
         cat = (category or "auto").strip().lower()
@@ -327,6 +415,7 @@ class MemoriseService:
             return {"code": 400, "data": "参数不合法:回答长度不能超过%d" % ANSWER_MAX_LEN}
         # 3. 黑名单检查:该回答曾被 AI 审核拒绝过,直接拒绝教学(防止同一句违规反复提交)
         if ans in self.blacklist:
+            self._record_reject(ip or "")
             return {"code": 400, "data": "这个回答好像不太妙,魔理沙拒绝记住它~"}
         # 3.5 违禁词前处理:正则命中违禁词的回答,直接拉黑 + 拒绝,不进待审队列
         if match_banned(ans):
@@ -340,7 +429,13 @@ class MemoriseService:
                 session.close()
             except Exception:
                 pass
+            self._record_reject(ip or "")
             return {"code": 400, "data": "这个回答好像不太妙,魔理沙拒绝记住它~"}
+        # 3.7 回答内容指纹:同一回答被大量不同 IP / 总次数提交 -> 疑似批量刷库,拒绝
+        ok_fp, _fp = self._check_answer_fp(ip or "", ans)
+        if not ok_fp:
+            self._record_reject(ip or "")
+            return {"code": 400, "data": "这个回答已经有很多人教过啦,魔理沙不重复记~"}
         # 4. 分词(有序去重);分词结果为空时用原始关键词兜底
         tokens = cut_keyword(kw) or [kw]
         # 4.5 分类落值:auto 由问候词表自动判定(命中 -> greeting,否则 -> word)
@@ -380,6 +475,9 @@ class MemoriseService:
             session.add(row)
             session.commit()
             session.refresh(row)  # 取回自增主键 memoryId
+            # 防注入:教学成功计数(IP 信誉用,窗口内不清零,重启清零)
+            with self._rate_lock:
+                self._ip_ok[ip or ""] += 1
             # 注意:不调用 self.index.add —— pending 内容不进索引,审核通过才生效
             return {
                 "code": 200,
