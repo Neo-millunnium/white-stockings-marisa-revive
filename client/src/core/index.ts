@@ -1,5 +1,6 @@
 // 魔理沙核心逻辑:说话格式、回复、教学、忘记、状态。
 import { api } from '../api'
+import { getUid } from './identity'
 
 /** 一条聊天记录 */
 export interface TalkItem {
@@ -42,7 +43,7 @@ export const Core = {
   async reply(content: string): Promise<string | undefined> {
     try {
       const ip = await getIp()
-      const res = await api.reply({ ip, keyword: content })
+      const res = await api.reply({ ip, keyword: content, uid: getUid() })
       if (res.code === 200) {
         return res.data?.answer
       }
@@ -55,15 +56,17 @@ export const Core = {
 
   /**
    * 教学:content 形如 "关键词`回答"(反引号分隔,产品逻辑必须保留),
+   * 也支持三段反引号 "关键词`回答`flag"(P4 对象判断,如 @user:<uid> / @time:night,两段兼容)。
    * category 为教学分类(word/sentence/syntax/logic/greeting/auto,默认 auto)。返回是否学习成功。
    */
   async teach(content: string, category = 'auto'): Promise<boolean> {
     const parts = content.split('`')
     const keyword = parts[0] || ''
     const answer = parts[1] || ''
+    const flag = parts[2] ? parts[2].trim() : 'all'
     const ip = await getIp()
     try {
-      const res = await api.add({ ip, keyword, answer, category })
+      const res = await api.add({ ip, keyword, answer, category, uid: getUid(), flag })
       return res.code === 200
     } catch (err) {
       console.log(`无法学习 ... ${err}`)
@@ -79,7 +82,7 @@ export const Core = {
     const len = list.length
     const answer = len > 3 ? list[len - 2].content : list[1]?.content
     try {
-      const res = await api.forget({ answer })
+      const res = await api.forget({ answer, uid: getUid() })
       return res.code === 200 && res.data === 'success'
     } catch (err) {
       console.log(`无法忘记 ... ${err}`)
@@ -159,4 +162,62 @@ export const Core = {
       return []
     }
   },
+
+  /** 好感信息(P2,FEATURE_FAVOR):返回好感数据;功能未开启(400)或失败返回 null */
+  async favor(uid: string): Promise<FavorInfo | null> {
+    try {
+      const res = await api.favor({ uid })
+      if (res.code === 200 && res.data) {
+        return res.data
+      }
+      return null
+    } catch (err) {
+      console.log(`好感获取失败 ... ${err}`)
+      return null
+    }
+  },
+
+  /** 心跳(P2,FEATURE_FAVOR):上报在线秒数累计好感,功能未开启时静默失败 */
+  async active(uid: string, seconds: number): Promise<boolean> {
+    try {
+      const res = await api.active({ uid, seconds: String(seconds) })
+      return res.code === 200
+    } catch (err) {
+      console.log(`心跳上报失败 ... ${err}`)
+      return false
+    }
+  },
+
+  /** 屏蔽/解除屏蔽(P5,FEATURE_MAID):仅调教师(uid == MASTER_UID)可用 */
+  async block(uid: string, targetUid: string, action = 'block'): Promise<boolean> {
+    try {
+      const res = await api.block({ uid, target_uid: targetUid, action })
+      return res.code === 200 && res.data === 'success'
+    } catch (err) {
+      console.log(`屏蔽操作失败 ... ${err}`)
+      return false
+    }
+  },
+
+  /** 调教师删除任意条目(P5,FEATURE_MAID):仅调教师可用 */
+  async adminDelete(uid: string, answer: string): Promise<boolean> {
+    try {
+      const res = await api.adminDelete({ uid, answer })
+      return res.code === 200 && res.data === 'success'
+    } catch (err) {
+      console.log(`调教师删除失败 ... ${err}`)
+      return false
+    }
+  },
+}
+
+/** 好感信息结构(P2,FEATURE_FAVOR) */
+export interface FavorInfo {
+  uid: string
+  score: number
+  level: number
+  level_name: string
+  talk_count: number
+  teach_count: number
+  active_seconds: number
 }

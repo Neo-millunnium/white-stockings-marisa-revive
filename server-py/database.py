@@ -30,6 +30,8 @@ _ADD_COLUMNS = {
     "updated_at": "ALTER TABLE memorise ADD COLUMN updated_at DATETIME NULL",
     "review_status": "ALTER TABLE memorise ADD COLUMN review_status VARCHAR(16) NULL DEFAULT 'pending'",
     "category": "ALTER TABLE memorise ADD COLUMN category VARCHAR(16) NULL",
+    "flag": "ALTER TABLE memorise ADD COLUMN flag VARCHAR(32) NULL DEFAULT 'all'",
+    "uid": "ALTER TABLE memorise ADD COLUMN uid VARCHAR(64) NULL",
 }
 
 
@@ -84,5 +86,31 @@ def run_migrations():
             "last_seen DATETIME NULL, "
             "resolved_at DATETIME NULL, "
             "UNIQUE KEY miss_keyword_keyword (keyword(255)))"
+        ))
+        # 好感度表(P2,与 models.Favorability 对应)
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS favorability ("
+            "uid VARCHAR(64) NOT NULL PRIMARY KEY, "
+            "ip VARCHAR(15) NULL, "
+            "score INT NOT NULL DEFAULT 0, "
+            "talk_count INT NOT NULL DEFAULT 0, "
+            "teach_count INT NOT NULL DEFAULT 0, "
+            "active_seconds INT NOT NULL DEFAULT 0, "
+            "level INT NOT NULL DEFAULT 0, "
+            "last_active_at DATETIME NULL)"
+        ))
+        # 调教师表(P5,与 models.Teacher 对应)
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS teacher ("
+            "uid VARCHAR(64) NOT NULL PRIMARY KEY, "
+            "role VARCHAR(16) NOT NULL DEFAULT 'master', "
+            "created_at DATETIME NULL)"
+        ))
+        # 被屏蔽用户表(P5,与 models.BlockedUser 对应)
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS blocked_user ("
+            "uid VARCHAR(64) NOT NULL PRIMARY KEY, "
+            "blocked_by VARCHAR(64) NULL, "
+            "created_at DATETIME NULL)"
         ))
         conn.commit()

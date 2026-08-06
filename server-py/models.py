@@ -29,6 +29,11 @@ class Memorise(Base):
     # 教学分类(源自 2010 年原始 QQ 调教 bot 的 teach 指令体系):
     # word/sentence/syntax/logic/greeting;NULL 或 auto 判定后落值,旧数据 NULL 视为未分类
     category = Column("category", String(16), nullable=True)
+    # 对象判断 flag(P4,FEATURE_FLAG):all(默认)/ user:<uid> / favor:high|medium|low / time:dawn|day|dusk|night
+    # 教学时给词条挂条件:只对特定人 / 好感阶段 / 时段生效;旧数据 NULL 视为 all
+    flag = Column("flag", String(32), nullable=True, default="all")
+    # 教学者 uid(P5,FEATURE_MAID):多人协作留痕,用于调教师权限判定(非调教师只能删自己教的行)
+    uid = Column("uid", String(64), nullable=True)
 
 
 class Blacklist(Base):
@@ -56,3 +61,45 @@ class MissKeyword(Base):
     first_seen = Column("first_seen", DateTime, nullable=True)        # 首次出现时间
     last_seen = Column("last_seen", DateTime, nullable=True)          # 最近一次出现时间
     resolved_at = Column("resolved_at", DateTime, nullable=True)      # 学会时间;NULL = 待学
+
+
+class Favorability(Base):
+    """好感度(P2,FEATURE_FAVOR):按匿名 uid 记录好感分数与统计,回复倾向随好感变化。
+
+    uid 是客户端自报的匿名身份(localStorage UUID),仅当"区分用户"用,不作可信权限;
+    ip 兜底记录最近来源。level 由 score 按 FAVOR_LEVELS 阈值映射回写。
+    """
+    __tablename__ = "favorability"
+
+    uid = Column("uid", String(64), primary_key=True)   # cookie UUID 主标识
+    ip = Column("ip", String(15), nullable=True)        # 最近来源 IP(辅助/兜底)
+    score = Column("score", Integer, nullable=False, default=0)
+    talk_count = Column("talk_count", Integer, nullable=False, default=0)
+    teach_count = Column("teach_count", Integer, nullable=False, default=0)
+    active_seconds = Column("active_seconds", Integer, nullable=False, default=0)
+    level = Column("level", Integer, nullable=False, default=0)  # 派生,由 score 映射
+    last_active_at = Column("last_active_at", DateTime, nullable=True)
+
+
+class Teacher(Base):
+    """调教师(P5,FEATURE_MAID):被授予调教权限的 uid(可删任意条目 / 屏蔽用户)。
+
+    首个调教师由服务端 env 配置 MASTER_UID 指定;本表用于二次授权。
+    """
+    __tablename__ = "teacher"
+
+    uid = Column("uid", String(64), primary_key=True)
+    role = Column("role", String(16), nullable=False, default="master")
+    created_at = Column("created_at", DateTime, nullable=True)
+
+
+class BlockedUser(Base):
+    """被屏蔽用户(P5,FEATURE_MAID):被调教师屏蔽后禁止教学。
+
+    屏蔽判定只作为教学拦截(Add 时检查),不影响提问。
+    """
+    __tablename__ = "blocked_user"
+
+    uid = Column("uid", String(64), primary_key=True)
+    blocked_by = Column("blocked_by", String(64), nullable=True)
+    created_at = Column("created_at", DateTime, nullable=True)

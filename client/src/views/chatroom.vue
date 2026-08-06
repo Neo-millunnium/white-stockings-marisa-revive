@@ -40,6 +40,15 @@
           <span class="system-cmd cmd-collect">
             试试：<span class="marisa-cmd">现在几点</span> / <span class="marisa-cmd">1+2</span>（资讯小工具）
           </span>
+          <span class="system-cmd cmd-collect">
+            教学可三段：<span class="marisa-cmd">关键词`回答`@user:xxx</span> 只对那人回 / <span class="marisa-cmd">@time:night</span> 只在晚上回
+          </span>
+          <span class="system-cmd cmd-collect">
+            <span class="marisa-cmd">logic</span> 分类回答里可用 <span class="marisa-cmd">{1+2}</span> / <span class="marisa-cmd">{now}</span>
+          </span>
+          <span v-if="isMaster" class="system-cmd cmd-collect">
+            <span class="marisa-cmd">block &lt;uid&gt;</span> / <span class="marisa-cmd">delete &lt;回答&gt;</span>（调教师）
+          </span>
           <div class="cmd_desc">
             另外你也可以通过输入
             <span style="font-weight: bold">hint</span> 查看其他人自定义的内容提示或小小线索
@@ -54,11 +63,20 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Core, type TalkItem } from '../core'
+import { getUid } from '../core/identity'
 
 const MARISA = '白絲魔理沙'
 const YOU = 'You'
+
+// 匿名身份(uid):localStorage UUID;P2 好感 / P4 flag 定向 / P5 留痕共用
+const uid = getUid()
+// 好感度是否开启(FEATURE_FAVOR):挂载时探测一次 /Favor,开启才显示好感与发心跳
+const favorEnabled = ref(false)
+// 调教师判定(P5):本地 uid 与构建期配置 VITE_MASTER_UID 一致才渲染 block/delete 指令
+// (MASTER_UID 同时要在后端 server-py/.env 配置,权限判定只信服务端)
+const isMaster = computed(() => !!import.meta.env.VITE_MASTER_UID && uid === import.meta.env.VITE_MASTER_UID)
 
 // 对话记录列表
 const talkList = ref<TalkItem[]>([])
@@ -67,6 +85,8 @@ const inputText = ref('')
 // 模板引用
 const youInput = ref<HTMLInputElement | null>(null)
 const talkPlace = ref<HTMLDivElement | null>(null)
+// 好感心跳定时器(P2)
+let heartbeatTimer: number | undefined
 
 // 教学模式标志:0 = 普通对话,1 = 教学中
 let cmdFlag = 0
@@ -108,13 +128,26 @@ async function sendMessage() {
   inputText.value = ''
 }
 
-/** 普通对话模式:识别 teach / forget / status / hint 指令,否则交给魔理沙回复 */
+/** 普通对话模式:识别 teach / forget / status / hint / block / delete 指令,否则交给魔理沙回复 */
 async function marisaThinking(content: string) {
   // teach 支持分类:teach / teach word / teach word 关键词 / teach auto ...
   const teachMatch = content.match(/^teach(?:\s+(word|sentence|syntax|logic|greeting|auto))?(?:\s+(.+))?$/i)
   if (teachMatch) {
     await startTeach((teachMatch[1] ?? 'auto').toLowerCase(), (teachMatch[2] ?? '').trim())
     return
+  }
+  // block <target_uid> [unblock] / delete <answer>(P5 调教师指令,仅本地 uid == MASTER_UID 时响应)
+  if (isMaster.value) {
+    const blockMatch = content.match(/^block(?:\s+(.+))?$/i)
+    if (blockMatch) {
+      await marisaBlock(blockMatch[1] ?? '')
+      return
+    }
+    const deleteMatch = content.match(/^delete(?:\s+(.+))?$/i)
+    if (deleteMatch) {
+      await marisaDelete(deleteMatch[1] ?? '')
+      return
+    }
   }
   switch (content) {
     case 'forget':
@@ -239,15 +272,46 @@ async function marisaStatus() {
         .map(([k, n]) => `${CATEGORY_LABELS[k] ?? k} ${n} 条`)
       if (parts.length) detail = `（${parts.join('、')}）`
     }
+    // 好感度(P2,FEATURE_FAVOR 开启时):在脑重量后显示,如(好感:普通 128 分)
+    let favorText = ''
+    if (favorEnabled.value) {
+      const f = await Core.favor(uid)
+      if (f) favorText = `（好感:${f.level_name} ${f.score} 分）`
+    }
     talkList.value.push(
       Core.speak(
         MARISA,
-        `目前魔理沙的脑重量是 ${weight} 克${detail}。如果我现在还不能理解您的意思的话，请教给我更多的知识，我会非常非常用心学习的～`,
+        `目前魔理沙的脑重量是 ${weight} 克${detail}${favorText}。如果我现在还不能理解您的意思的话，请教给我更多的知识，我会非常非常用心学习的～`,
       ),
     )
   } else {
     talkList.value.push(Core.speak(MARISA, '我的记忆要一片混乱了 ...'))
   }
+}
+
+/** 调教师屏蔽/解除屏蔽(P5,FEATURE_MAID):用法 block <目标 uid> [unblock] */
+async function marisaBlock(arg: string) {
+  const parts = arg.trim().split(/\s+/)
+  const targetUid = parts[0] || ''
+  const action = parts[1] === 'unblock' ? 'unblock' : 'block'
+  if (!targetUid) {
+    talkList.value.push(Core.speak(MARISA, '用法:block <目标 uid> [unblock]'))
+    return
+  }
+  const ok = await Core.block(uid, targetUid, action)
+  talkList.value.push(
+    Core.speak(MARISA, ok ? (action === 'unblock' ? '已解除屏蔽' : '已屏蔽该用户') : '操作失败(未开启或没有权限)'),
+  )
+}
+
+/** 调教师删除任意条目(P5,FEATURE_MAID):用法 delete <回答原文> */
+async function marisaDelete(answer: string) {
+  if (!answer.trim()) {
+    talkList.value.push(Core.speak(MARISA, '用法:delete <回答原文>'))
+    return
+  }
+  const ok = await Core.adminDelete(uid, answer.trim())
+  talkList.value.push(Core.speak(MARISA, ok ? '已删除' : '删除失败(未开启或没有权限)'))
 }
 
 /** 查看提示线索:随机展示一条已审核通过的记忆 */
@@ -297,10 +361,25 @@ watch(
 onMounted(async () => {
   // 初始自动聚焦输入框(还原旧版 v-focus 指令效果)
   youInput.value?.focus()
+  // 好感度(P2,FEATURE_FAVOR):探测一次 /Favor,开启才显示好感 + 每 60s 发一次心跳(off 时前端不调)
+  const f = await Core.favor(uid)
+  if (f) {
+    favorEnabled.value = true
+    heartbeatTimer = window.setInterval(() => {
+      Core.active(uid, 60)
+    }, 60_000)
+  }
   // greeting 开场白:访问网站时自动随机发一条问候类记忆(2010-2011 原版语义,无则静默)
   const g = await Core.greeting()
   if (g) {
     talkList.value.push(Core.speak(MARISA, g.answer))
+  }
+})
+
+// 卸载时清理心跳定时器
+onUnmounted(() => {
+  if (heartbeatTimer !== undefined) {
+    clearInterval(heartbeatTimer)
   }
 })
 </script>

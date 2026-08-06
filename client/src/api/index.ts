@@ -44,15 +44,21 @@ async function request<T = unknown>(
 }
 
 export const api = {
-  /** 教学:POST /Add,form: ip, keyword, answer, category(默认 auto 自动判定) */
-  add: (data: { ip: string; keyword: string; answer: string; category?: string }) =>
-    request<{ ip: string; keyword: string; answer: string; category: string }>('/Add', data),
+  /** 教学:POST /Add,form: ip, keyword, answer, category(默认 auto 自动判定), uid(匿名身份), flag(P4 对象判断) */
+  add: (data: {
+    ip: string
+    keyword: string
+    answer: string
+    category?: string
+    uid?: string
+    flag?: string
+  }) => request<{ ip: string; keyword: string; answer: string; category: string }>('/Add', data),
 
-  /** 提问:POST /Reply,form: ip, keyword。命中 code=200;未命中 code=10001(data.answer 为兜底话术);限流 code=429 */
-  reply: (data: { ip: string; keyword: string }) => request<{ answer: string }>('/Reply', data),
+  /** 提问:POST /Reply,form: ip, keyword, uid(匿名身份)。命中 code=200;未命中 code=10001(data.answer 为兜底话术);限流 code=429 */
+  reply: (data: { ip: string; keyword: string; uid?: string }) => request<{ answer: string }>('/Reply', data),
 
-  /** 忘记:POST /Forget,form: answer,成功返回 data: "success" */
-  forget: (data: { answer: string }) => request<string>('/Forget', data),
+  /** 忘记:POST /Forget,form: answer, uid(权限留痕),成功返回 data: "success" */
+  forget: (data: { answer: string; uid?: string }) => request<string>('/Forget', data),
 
   /** 状态:POST /Status,无参数,data 为知识条数 */
   status: () => request<number>('/Status'),
@@ -70,4 +76,27 @@ export const api = {
   /** 待学习清单:POST /Misses,form: ip(复用回复限流防刷),data 为 {list:[{keyword,count,last_seen}]} */
   misses: (data: { ip: string }) =>
     request<{ list: Array<{ keyword: string; count: number; last_seen: string }> }>('/Misses', data),
+
+  /** 好感信息:POST /Favor,form: uid。功能未开启时后端返回 code=400 */
+  favor: (data: { uid: string }) =>
+    request<{
+      uid: string
+      score: number
+      level: number
+      level_name: string
+      talk_count: number
+      teach_count: number
+      active_seconds: number
+    }>('/Favor', data),
+
+  /** 心跳:POST /Active,form: uid, seconds(在线秒数)。每 uid 每分钟限 1 次 */
+  active: (data: { uid: string; seconds: string }) => request<string>('/Active', data),
+
+  /** 屏蔽/解除屏蔽:POST /Block,form: uid, target_uid, action(block/unblock)。仅调教师可用 */
+  block: (data: { uid: string; target_uid: string; action?: string }) =>
+    request<string>('/Block', data),
+
+  /** 调教师删除任意条目:POST /Admin/Delete,form: uid, answer。仅调教师可用 */
+  adminDelete: (data: { uid: string; answer: string }) =>
+    request<string>('/Admin/Delete', data),
 }

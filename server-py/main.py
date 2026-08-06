@@ -78,27 +78,34 @@ def index():
 
 
 @app.post("/Add")
-def add(ip: str = Form(""), keyword: str = Form(""), answer: str = Form(""), category: str = Form("auto")):
+def add(ip: str = Form(""), keyword: str = Form(""), answer: str = Form(""),
+        category: str = Form("auto"), uid: str = Form(""), flag: str = Form("all")):
     """教学:接收 form 字段 ip/keyword/answer/category,返回 {code, data}。
 
     category:word/sentence/syntax/logic/greeting/auto(默认 auto,自动判定)。
+    uid:教学者匿名身份(identity.ts 生成,P2 好感/P5 留痕,老客户端可不传);
+    flag:对象判断条件(P4,如 user:<uid>/favor:high/time:night,仅 FEATURE_FLAG 开启时生效)。
     """
-    return svc.add(ip, keyword, answer, category)
+    return svc.add(ip, keyword, answer, category, uid, flag)
 
 
 @app.post("/Reply")
-def reply(ip: str = Form(""), keyword: str = Form("")):
+def reply(ip: str = Form(""), keyword: str = Form(""), uid: str = Form("")):
     """回复:接收 form 字段 ip/keyword,命中返回回答,未命中返回兜底话术。
 
-    ip 用于每 IP 限流(每 IP 每分钟最多 REPLY_RATE_LIMIT 次),由前端 getIp() 传入。
+    ip 用于每 IP 限流(每 IP 每分钟最多 REPLY_RATE_LIMIT 次),由前端 getIp() 传入;
+    uid 为匿名身份(话题上下文/好感/flag 判定用,老客户端可不传)。
     """
-    return svc.reply(ip, keyword)
+    return svc.reply(ip, keyword, uid)
 
 
 @app.post("/Forget")
-def forget(answer: str = Form("")):
-    """忘记:按 answer 精确删除,返回 success。"""
-    return svc.forget(answer)
+def forget(answer: str = Form(""), uid: str = Form("")):
+    """忘记:按 answer 精确删除,返回 success。
+
+    uid(FEATURE_MAID 开启时):非调教师只能删自己教的行,历史 NULL 数据仅调教师可删。
+    """
+    return svc.forget(answer, uid)
 
 
 @app.post("/Status")
@@ -135,6 +142,56 @@ def misses(ip: str = Form("")):
     if not svc._check_reply_rate(ip or ""):
         return {"code": 429, "data": "问得太频繁了,歇一歇吧~"}
     return svc.misses()
+
+
+def _feature_off():
+    """功能开关关闭时的统一返回:路由保留、业务码 400,避免前端 404 处理差异。"""
+    return {"code": 400, "data": "这个功能还没有开启哦~"}
+
+
+@app.post("/Favor")
+def favor(uid: str = Form(""), ip: str = Form("")):
+    """好感度(P2,FEATURE_FAVOR):查询某 uid 的好感分数/等级/计数。
+
+    关闭时返回 400「功能未开启」,前端据此隐藏好感展示与心跳。
+    """
+    if not config.is_enabled("FAVOR"):
+        return _feature_off()
+    return svc.favor(uid)
+
+
+@app.post("/Active")
+def active(uid: str = Form(""), ip: str = Form(""), seconds: str = Form("0")):
+    """心跳(P2,FEATURE_FAVOR):上报在线秒数累计好感,每 uid 每分钟限 1 次(复用限流)。"""
+    if not config.is_enabled("FAVOR"):
+        return _feature_off()
+    if not (uid or "").strip():
+        return {"code": 400, "data": "参数不合法:缺少 uid"}
+    try:
+        secs = int(seconds or "0")
+    except ValueError:
+        return {"code": 400, "data": "参数不合法:seconds 需为整数"}
+    if secs <= 0 or secs > 86400:
+        return {"code": 400, "data": "参数不合法:seconds 需在 1-86400 之间"}
+    return svc.active(uid, ip, secs)
+
+
+@app.post("/Block")
+def block(uid: str = Form(""), target_uid: str = Form(""), action: str = Form("block")):
+    """屏蔽/解除屏蔽(P5,FEATURE_MAID):仅调教师(MASTER_UID / teacher 表)可用。"""
+    if not config.is_enabled("MAID"):
+        return _feature_off()
+    return svc.block(uid, target_uid, action)
+
+
+@app.post("/Admin/Delete")
+def admin_delete(uid: str = Form(""), answer: str = Form("")):
+    """调教师删除任意条目(P5,FEATURE_MAID):复用增强后的 forget(调教师不受留痕限制)。"""
+    if not config.is_enabled("MAID"):
+        return _feature_off()
+    if not svc._is_master(uid):
+        return {"code": 400, "data": "无权限"}
+    return svc.forget(answer, requester_uid=uid)
 
 
 @app.post("/Review")

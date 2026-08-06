@@ -23,6 +23,14 @@ _DEFAULTS = {
     "EXCHANGE_API": "",       # 汇率工具
     "DICT_API": "",           # 百科/词典工具(萌娘百科 extracts 模板,见 tools.py)
     "AMAP_KEY": "",           # 高德 Web 服务 key(配置后启用 IP 定位 + 实时天气工具)
+    # ---- 功能开关(每个功能一个开关,on/off;默认 off = 功能未启用,行为与未实现时完全一致)----
+    "FEATURE_FAVOR": "off",    # P2 好感度系统
+    "FEATURE_THEME": "off",    # P3 话题感知
+    "FEATURE_FLAG": "off",     # P4 对象判断 flag
+    "FEATURE_MAID": "off",     # P5 多人协作 + 调教师权限
+    "FEATURE_CODE": "off",     # P6 代码执行模板
+    # P5 调教师权限:首个调教师 uid(env 配置;权限判定只信这个配置,不信任客户端自报身份)
+    "MASTER_UID": "",
 }
 
 # 加载 server-py/.env(若存在);用 setdefault 保证已有环境变量优先
@@ -41,6 +49,11 @@ if _ENV_PATH.exists():
 def get(name: str) -> str:
     """读取配置项:环境变量 > .env > 默认值。"""
     return os.environ.get(name, _DEFAULTS[name])
+
+
+def is_enabled(name: str) -> bool:
+    """功能开关:FEATURE_<NAME> 配置为 on/1/true 时启用(大小写不敏感),默认关闭。"""
+    return get("FEATURE_" + name.upper()).strip().lower() in ("on", "1", "true")
 
 
 def http_port() -> int:
