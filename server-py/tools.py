@@ -52,10 +52,14 @@ def _fetch(url, timeout=5, max_len=200):
     """带超时的 GET 请求,失败/超时返回 None(在线工具不可用时静默降级)。
 
     max_len 控制返回文本截断长度:文本类工具(汇率/词典)用默认 200 足够;
-    需要解析 JSON 的工具(天气)必须传足量长度,否则截断会破坏 JSON。
+    需要解析 JSON 的工具(天气/百科)必须传足量长度,否则截断会破坏 JSON。
+    带浏览器 UA:部分站点(如萌娘百科)会拒绝 Python-urllib 默认 UA。
     """
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0 (marisa-bot; web-marisa)"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
     except Exception:
         return None
@@ -130,6 +134,46 @@ def _handler_weather(keyword, ip=None):
         return None
 
 
+# ---- 百科工具(萌娘百科,可插拔:DICT_API 配置后启用)----
+# MediaWiki extracts 摘要 API:带 redirects/exintro,返回词条开头摘要纯文本
+_DICT_RE = re.compile(r"(什么是|什么意思|释义|介绍一下|是谁|百科)")
+
+
+def _handler_dict(keyword, ip=None):
+    """百科工具(萌娘百科):取词条开头摘要(已审核的社区内容),返回前 120 字。
+
+    DICT_API 是 URL 模板,{keyword} 替换为 URL 编码后的输入;
+    词条不存在(pages 为 -1)或摘要为空返回 None,落到普通回复。
+    """
+    api = config.get("DICT_API")
+    if not api:
+        return None
+    # 从问句中提取词条名:去掉"什么是/介绍一下"等前缀与"是什么/是谁"等后缀
+    q = re.sub(r"^(什么是|什么是|介绍一下|解释一下|说说|介绍|查一下|百度)", "", keyword)
+    q = re.sub(r"(是什么意思|什么意思|是啥意思|是什么|是啥|是谁|怎么用|怎么玩|百科)$", "", q)
+    q = q.strip(" \t的?呢啊")
+    if not q:
+        return None
+    url = api.replace("{keyword}", urllib.parse.quote(q))
+    raw = _fetch(url, max_len=4000)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        pages = (data.get("query") or {}).get("pages") or {}
+        if not pages:
+            return None
+        page = next(iter(pages.values()))
+        title = page.get("title") or keyword
+        extract = (page.get("extract") or "").strip()
+        if not extract:
+            return None  # 词条不存在(页 id 为 -1)或摘要为空(重定向/消歧义)
+        extract = re.sub(r"\s+", " ", extract)
+        return "「%s」: %s" % (title, extract[:120])
+    except Exception:
+        return None
+
+
 # ---- 工具注册表 ----
 # TOOL = (name, compiled_regex, handler(keyword, ip) -> Optional[str])
 def _build_tools():
@@ -141,7 +185,7 @@ def _build_tools():
     online = (
         ("weather", _WEATHER_RE, _handler_weather, "AMAP_KEY"),
         ("exchange", r"(汇率|美元|欧元|日元)", None, "EXCHANGE_API"),
-        ("dict", r"(什么是|意思|释义)", None, "DICT_API"),
+        ("dict", _DICT_RE, _handler_dict, "DICT_API"),
     )
     for name, pattern, handler, api_key in online:
         if not config.get(api_key):
