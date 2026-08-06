@@ -20,9 +20,8 @@ _DEFAULTS = {
     "REVIEW_SECRET": "",      # POST /Review 手动触发审核的密钥(为空=禁用该接口)
     # 资讯工具在线 API 模板(含 {keyword} 占位符,被替换成 URL 编码后的输入);
     # 默认空字符串 = 禁用对应在线工具(时间/计算器是离线工具,无需配置恒启用)
-    "WEATHER_API": "",        # 天气工具(如 https://wttr.in/{keyword}?format=3)
     "EXCHANGE_API": "",       # 汇率工具
-    "DICT_API": "",           # 百科/词典工具
+    "DICT_API": "",           # 百科/词典工具(萌娘百科 extracts 模板,见 tools.py)
     "AMAP_KEY": "",           # 高德 Web 服务 key(配置后启用 IP 定位 + 实时天气工具)
 }
 
