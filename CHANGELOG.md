@@ -1,0 +1,30 @@
+# Changelog
+
+本项目的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+
+## [2026-08-06]
+
+### Added
+
+- **AI 内容审核(先审后玩)**:教学内容提交后进入待审队列(`review_status=pending`),不立即生效;每小时由 DeepSeek 批量审核(每批最多 10 条,`_review_loop`),审核通过才进内存索引生效,被拒的回答原文进 `blacklist` 表(同回答再次教学直接拒绝)。`POST /Review`、`POST /Reload` 可手动触发(secret=`REVIEW_SECRET`)
+- **违禁词正则前处理**:`server-py/banned_words.txt` 配置正则词库,教学回答命中违禁词直接拒绝 + 拉黑,不进待审队列
+- **回复限流**:每 IP 每分钟 30 次回复(独立于教学限流的 10 次/分),前端请求携带 ip
+- **教学分类体系(teach 指令)**:恢复 2010 年原始 QQ 调教 bot 的 `teach word / sentence / syntax / logic / greeting` 分门别类教学,新增 `POST /Categories`、`POST /Greeting` 接口
+  - `auto` 自动判定分类(问候词表命中 -> greeting,否则 -> word)
+  - greeting 语义:单条问候语(开场白),非问答对——存储时清空 keyword/分词/raw_keyword,只保留 answer,不参与问答匹配
+  - 各分类独立匹配阈值:word 0.4 / sentence 0.3 / logic 0.2(提到即答)/ syntax 0.4(剔除语气虚词)/ greeting 0.4 + 精确匹配优先;旧数据 NULL 视为未分类,保持 0.4 与原版一致
+- **数据库迁移**:SQLite 老库启动时自动补列,MySQL/MariaDB 启动时对缺失列执行幂等 `ALTER TABLE`(含黑名单表),`DB_TYPE=mysql` 无缝升级
+
+### Changed
+
+- 教学限流维持 10 次/分;回复新增独立限流 30 次/分
+- 审核 key 读取顺序:环境变量 `DEEPSEEK_API_KEY` -> `server-py/.env` 兜底,解析容错(容忍空格、跳过注释)
+
+### Fixed
+
+- 审核 `review.py` 的 .env 解析与 `config.py` 一致(容忍空格、跳过注释、无导入顺序依赖)
+- review 文档注释修正:审核为每小时批次,非每日 4 点
+
+## [2026-07-31 之前(重构基线)]
+
+2026 年本地现代化重构完成前的历史变更见 git 历史(baseline commit 为原项目 zip 快照,包含 2018-2019 原网页版与 2010 原始调教 bot 的玩法传承)。
