@@ -67,6 +67,12 @@ def _check(tree):
                 if isinstance(node.value, (int, float, str, bool)) or node.value is None:
                     continue
                 return False
+            if isinstance(node, ast.BinOp):
+                # 字符串常量不允许参与算术:防 'a' * 10**9 内存炸弹(eval 时直接分配 ~1GB,
+                # 结果检查在 eval 之后来不及拦)。计算器/模板场景只需要数值运算,字符串算术无用途。
+                for operand in (node.left, node.right):
+                    if isinstance(operand, ast.Constant) and isinstance(operand.value, str):
+                        return False
             continue  # 名字/运算符节点放行,求值命名空间只含 SAFE_NAMES + 空 builtins
         # 其余一切节点(Call/Attribute/Subscript/Import/Assign/循环/lambda/推导式/f-string 等)一律拒绝
         return False
