@@ -516,7 +516,7 @@ class MemoriseService:
         # 1.5 资讯工具:用户没显式教过时,时间/计算器等工具兜底。
         #     优先级低于精确匹配(教过的关键词永远赢过工具)、高于分词重合;
         #     深夜催睡在最顶部已拦截,工具不会在催睡时段触发。
-        tool_ans = match_tool(kw)
+        tool_ans = match_tool(kw, ip)
         if tool_ans:
             return {"code": 200, "data": {"answer": tool_ans}}
         # 2. 分词后查倒排索引,收集重合度达到阈值的候选

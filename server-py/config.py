@@ -23,6 +23,7 @@ _DEFAULTS = {
     "WEATHER_API": "",        # 天气工具(如 https://wttr.in/{keyword}?format=3)
     "EXCHANGE_API": "",       # 汇率工具
     "DICT_API": "",           # 百科/词典工具
+    "AMAP_KEY": "",           # 高德 Web 服务 key(配置后启用 IP 定位 + 实时天气工具)
 }
 
 # 加载 server-py/.env(若存在);用 setdefault 保证已有环境变量优先
