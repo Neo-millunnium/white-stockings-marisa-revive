@@ -74,4 +74,15 @@ def run_migrations():
             "answer VARCHAR(500) NOT NULL PRIMARY KEY, "
             "created_at DATETIME NULL)"
         ))
+        # 待学习清单表(与 models.MissKeyword 对应;TEXT 唯一索引需带前缀长度)
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS miss_keyword ("
+            "id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY, "
+            "keyword TEXT NOT NULL, "
+            "miss_count INTEGER NOT NULL DEFAULT 1, "
+            "first_seen DATETIME NULL, "
+            "last_seen DATETIME NULL, "
+            "resolved_at DATETIME NULL, "
+            "UNIQUE KEY miss_keyword_keyword (keyword(255)))"
+        ))
         conn.commit()

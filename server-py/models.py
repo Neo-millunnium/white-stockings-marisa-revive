@@ -40,3 +40,19 @@ class Blacklist(Base):
 
     answer = Column("answer", String(500), primary_key=True)  # 被拒的回答原文
     created_at = Column("created_at", DateTime, nullable=True)  # 加入黑名单时间
+
+
+class MissKeyword(Base):
+    """待学习清单:被问过但没答上的未命中关键词(聚合计数,跨重启保留)。
+
+    未命中时 reply() 里 _miss_upsert 做 count+1;教学审核通过后 _resolve_misses
+    把已学会的关键词置 resolved_at,从清单隐藏(未 resolve 且 miss_count >= 2 才展示)。
+    """
+    __tablename__ = "miss_keyword"
+
+    id = Column("id", Integer, primary_key=True, autoincrement=True)  # 主键自增
+    keyword = Column("keyword", Text, nullable=False, unique=True)    # 归一化后的未命中关键词(去空白/标点)
+    miss_count = Column("miss_count", Integer, nullable=False, default=1)  # 累计未命中次数
+    first_seen = Column("first_seen", DateTime, nullable=True)        # 首次出现时间
+    last_seen = Column("last_seen", DateTime, nullable=True)          # 最近一次出现时间
+    resolved_at = Column("resolved_at", DateTime, nullable=True)      # 学会时间;NULL = 待学

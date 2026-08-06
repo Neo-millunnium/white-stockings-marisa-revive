@@ -125,6 +125,18 @@ def hint():
     return svc.hint()
 
 
+@app.post("/Misses")
+def misses(ip: str = Form("")):
+    """待学习清单:返回被问过 >=2 次且尚未学会的未命中关键词,按次数降序。
+
+    对应前端 miss 指令(展示"别人问了但没答上"的词,引导教学)。
+    ip 复用回复限流防刷(直接调 svc 的限流方法,不通过 reply)。
+    """
+    if not svc._check_reply_rate(ip or ""):
+        return {"code": 429, "data": "问得太频繁了,歇一歇吧~"}
+    return svc.misses()
+
+
 @app.post("/Review")
 def review(secret: str = Form("")):
     """手动触发一次 AI 审核(不等待每小时定时任务)。

@@ -140,4 +140,23 @@ export const Core = {
       return null
     }
   },
+
+  /**
+   * 待学习清单:返回被问过 >=2 次且尚未学会的未命中关键词列表。
+   * 对应界面的 miss 指令(展示"别人问了但没答上"的词,引导教学)。
+   * 失败返回空数组。
+   */
+  async misses(): Promise<Array<{ keyword: string; count: number; last_seen: string }>> {
+    try {
+      const ip = await getIp()
+      const res = await api.misses({ ip })
+      if (res.code === 200 && res.data?.list) {
+        return res.data.list
+      }
+      return []
+    } catch (err) {
+      console.log(`待学习清单获取失败 ... ${err}`)
+      return []
+    }
+  },
 }

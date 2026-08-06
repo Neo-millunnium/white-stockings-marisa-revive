@@ -23,6 +23,7 @@ from sqlalchemy import text
 
 import models
 from database import SessionLocal
+from tools import match_tool
 
 # ---- 业务常量 ----
 NOT_FOUND_ANSWER = "唔嗯...不懂你在说什么呢...教教我吧~"  # 未命中的兜底话术(与 Go 版一致)
@@ -33,6 +34,7 @@ ADD_RATE_LIMIT = 10          # 每 IP 每分钟最多教学次数
 REPLY_RATE_LIMIT = 30        # 每 IP 每分钟最多回复次数
 RATE_WINDOW = 60             # 限流时间窗口(秒)
 MISS_LOG_MAX = 50            # 内存中保留的最近未命中关键词条数
+MISS_LIST_MAX = 20           # 待学习清单最多返回的条数(按 miss_count 降序)
 # ---- 防分布式注入(换 IP 多来源攻击)----
 GLOBAL_ADD_RATE_LIMIT = 100      # 全站教学合计:每分钟最多 100 次(防多 IP 打爆审核队列)
 ANSWER_FP_WINDOW = 600           # 回答内容指纹统计窗口(秒)= 10 分钟
@@ -511,6 +513,12 @@ class MemoriseService:
             chosen = max(exact, key=lambda e: e.memory_id)  # 多条时取最新一条
             self._bump_hit(chosen)
             return {"code": 200, "data": {"answer": chosen.answer}}
+        # 1.5 资讯工具:用户没显式教过时,时间/计算器等工具兜底。
+        #     优先级低于精确匹配(教过的关键词永远赢过工具)、高于分词重合;
+        #     深夜催睡在最顶部已拦截,工具不会在催睡时段触发。
+        tool_ans = match_tool(kw)
+        if tool_ans:
+            return {"code": 200, "data": {"answer": tool_ans}}
         # 2. 分词后查倒排索引,收集重合度达到阈值的候选
         #    阈值按词条分类动态取:word 0.4 / sentence 0.3 / logic 0.2 /
         #    syntax 0.4(去虚词后算)/ greeting 0.4(另有精确匹配优先)
@@ -522,9 +530,10 @@ class MemoriseService:
             stopwords = SYNTAX_STOPWORDS if cat == "syntax" else None
             if overlap_ratio(entry.tokens, tokens, stopwords) >= threshold:
                 candidates.append(entry)
-        # 3. 未命中:记录最近未命中的关键词(内存,最多 50 条),返回兜底话术
+        # 3. 未命中:记录最近未命中的关键词(内存,最多 50 条)+ 落库聚合(待学习清单),返回兜底话术
         if not candidates:
             self.recent_misses.append((time.time(), kw))
+            self._miss_upsert(kw)
             return {"code": 10001, "data": {"answer": NOT_FOUND_ANSWER}}
         # 4. 命中多条时随机选一条(新增,原实现固定返回第一条)
         chosen = random.choice(candidates)
@@ -547,6 +556,107 @@ class MemoriseService:
         except Exception:
             # 命中计数只是统计信息,失败不影响回复功能
             pass
+        finally:
+            session.close()
+
+    # ---- 待学习清单 ----
+    def _miss_upsert(self, kw):
+        """未命中关键词落库聚合(待学习清单):count+1、更新 last_seen,首次写入 first_seen。
+
+        关键词做归一化(去空白/标点/转小写)后存储,避免 "xx " 与 "xx" 重复计数;
+        全符号输入归一化后为空时保留原文,避免落空行。DB 异常不影响主流程(统计信息)。
+        """
+        norm = re.sub(r"[\s\W_]+", "", kw, flags=re.UNICODE).lower() or kw
+        session = SessionLocal()
+        try:
+            now = datetime.now()
+            row = session.query(models.MissKeyword).filter(models.MissKeyword.keyword == norm).first()
+            if row:
+                row.miss_count += 1
+                row.last_seen = now
+            else:
+                session.add(models.MissKeyword(
+                    keyword=norm, miss_count=1, first_seen=now, last_seen=now, resolved_at=None,
+                ))
+            session.commit()
+        except Exception:
+            pass
+        finally:
+            session.close()
+
+    def _resolve_misses(self, row, session=None):
+        """把已学会的未命中关键词标记为已解决(审核通过时调用),不再出现在待学习清单。
+
+        判定条件(任一满足即 resolve,与教学合并同哲学):
+        - miss.keyword == row.raw_keyword(精确)
+        - set(cut_keyword(miss.keyword)) ⊆ set(split_keyword(row.keyword))(分词子集)
+
+        session 可传入 review_pending 的会话(避免跨会话写锁冲突),不传则自开一个;
+        DB 异常 try/except 兜底,不影响审核主流程。
+        """
+        own = session is None
+        if own:
+            session = SessionLocal()
+        try:
+            approved_raw = (row.raw_keyword or "").strip()
+            approved_tokens = set(split_keyword(row.keyword)) if row.keyword else set()
+            if not approved_raw and not approved_tokens:
+                return
+            now = datetime.now()
+            misses = session.query(models.MissKeyword).filter(
+                models.MissKeyword.resolved_at.is_(None)
+            ).all()
+            for miss in misses:
+                if approved_raw and miss.keyword == approved_raw:
+                    miss.resolved_at = now
+                elif approved_tokens:
+                    miss_tokens = set(cut_keyword(miss.keyword))
+                    if miss_tokens and miss_tokens <= approved_tokens:
+                        miss.resolved_at = now
+            if own:
+                session.commit()
+        except Exception:
+            pass
+        finally:
+            if own:
+                session.close()
+
+    def misses(self):
+        """待学习清单:返回被问过 >=2 次且尚未学会(resolved_at IS NULL)的未命中关键词。
+
+        按 miss_count 降序、last_seen 倒序,最多返回 MISS_LIST_MAX 条。
+        """
+        session = SessionLocal()
+        try:
+            rows = (
+                session.query(models.MissKeyword)
+                .filter(
+                    models.MissKeyword.resolved_at.is_(None),
+                    models.MissKeyword.miss_count >= 2,
+                )
+                .order_by(
+                    models.MissKeyword.miss_count.desc(),
+                    models.MissKeyword.last_seen.desc(),
+                )
+                .limit(MISS_LIST_MAX)
+                .all()
+            )
+            return {
+                "code": 200,
+                "data": {
+                    "list": [
+                        {
+                            "keyword": r.keyword,
+                            "count": r.miss_count,
+                            "last_seen": r.last_seen.strftime("%Y-%m-%d %H:%M") if r.last_seen else "",
+                        }
+                        for r in rows
+                    ]
+                },
+            }
+        except Exception:
+            # DB 异常时返回空清单,不影响主流程
+            return {"code": 200, "data": {"list": []}}
         finally:
             session.close()
 
@@ -673,6 +783,8 @@ class MemoriseService:
                         row.memory_id, tokens, row.answer or "",
                         row.raw_keyword or "", row.hit_count or 0, "approved", row.category or "",
                     ))
+                    # 待学习清单:该关键词已学会,把对应未命中记录标记为已解决(用同一会话避免写锁冲突)
+                    self._resolve_misses(row, session)
                 reviewed += 1
             session.commit()
             return {"reviewed": reviewed, "rejected": rejected, "errors": errors}

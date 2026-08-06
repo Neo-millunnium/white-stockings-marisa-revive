@@ -34,6 +34,12 @@
           <span class="system-cmd cmd-collect">
             <span class="marisa-cmd">status</span>&nbsp;查看目前知识所掌握情况
           </span>
+          <span class="system-cmd cmd-collect">
+            <span class="marisa-cmd">miss</span>&nbsp;查看待学习清单
+          </span>
+          <span class="system-cmd cmd-collect">
+            试试：<span class="marisa-cmd">现在几点</span> / <span class="marisa-cmd">1+2</span>（资讯小工具）
+          </span>
           <div class="cmd_desc">
             另外你也可以通过输入
             <span style="font-weight: bold">hint</span> 查看其他人自定义的内容提示或小小线索
@@ -119,6 +125,9 @@ async function marisaThinking(content: string) {
       break
     case 'hint':
       await marisaHint()
+      break
+    case 'miss':
+      await marisaMiss()
       break
     default:
       await marisaReply(content)
@@ -250,6 +259,23 @@ async function marisaHint() {
     )
   } else {
     talkList.value.push(Core.speak(MARISA, '唔 ... 现在还没有任何线索可以给你，快教教我点什么吧 ~'))
+  }
+}
+
+/** 查看待学习清单:展示"别人问了但没答上"的关键词,逐条引导教学 */
+async function marisaMiss() {
+  const list = await Core.misses()
+  if (list.length === 0) {
+    talkList.value.push(Core.speak(MARISA, '唔 ... 现在还没有没答上来的问题,大家都把魔理沙喂饱饱的 ~'))
+    return
+  }
+  for (const item of list) {
+    talkList.value.push(
+      Core.speak(
+        MARISA,
+        `有人问过「${item.keyword}」${item.count} 次没答上,试试 teach ${item.keyword}\`回答\`~`,
+      ),
+    )
   }
 }
 

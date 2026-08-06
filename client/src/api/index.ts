@@ -66,4 +66,8 @@ export const api = {
 
   /** 提示线索:POST /Hint,无参数,data 为 {keyword, answer} 随机一条 */
   hint: () => request<{ keyword: string; answer: string }>('/Hint'),
+
+  /** 待学习清单:POST /Misses,form: ip(复用回复限流防刷),data 为 {list:[{keyword,count,last_seen}]} */
+  misses: (data: { ip: string }) =>
+    request<{ list: Array<{ keyword: string; count: number; last_seen: string }> }>('/Misses', data),
 }
