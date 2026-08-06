@@ -48,15 +48,19 @@ def _handler_calc(keyword, ip=None):
 
 
 # ---- 在线工具(可插拔,配置了对应 API 才注册;默认关)----
-def _fetch(url, timeout=5):
-    """带超时的 GET 请求,失败/超时返回 None(在线工具不可用时静默降级)。"""
+def _fetch(url, timeout=5, max_len=200):
+    """带超时的 GET 请求,失败/超时返回 None(在线工具不可用时静默降级)。
+
+    max_len 控制返回文本截断长度:文本类工具(汇率/词典)用默认 200 足够;
+    需要解析 JSON 的工具(天气)必须传足量长度,否则截断会破坏 JSON。
+    """
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
     except Exception:
         return None
     text = re.sub(r"\s+", " ", raw).strip()
-    return text[:200] if text else None
+    return text[:max_len] if text else None
 
 
 def _make_online(pattern, api_key):
@@ -93,7 +97,7 @@ def _handler_weather(keyword, ip=None):
     if not key:
         return None
     # 1. IP 定位(ip 为空时高德按出口 IP 定位,至少能返回省份)
-    geo = _fetch(_AMAP_IP_API % (key, urllib.parse.quote(ip or "")))
+    geo = _fetch(_AMAP_IP_API % (key, urllib.parse.quote(ip or "")), max_len=2000)
     if not geo:
         return None
     try:
@@ -107,7 +111,7 @@ def _handler_weather(keyword, ip=None):
     if not adcode:
         return None
     # 2. 查实时天气
-    wea = _fetch(_AMAP_WEATHER_API % (key, adcode))
+    wea = _fetch(_AMAP_WEATHER_API % (key, adcode), max_len=4000)
     if not wea:
         return None
     try:
