@@ -23,6 +23,7 @@ _DEFAULTS = {
     "EXCHANGE_API": "",       # 汇率工具
     "DICT_API": "",           # 百科/词典工具(萌娘百科 extracts 模板,见 tools.py)
     "AMAP_KEY": "",           # 高德 Web 服务 key(配置后启用 IP 定位 + 实时天气工具)
+    "AMAP_ADCODE": "",        # 默认城市 adcode(如拉萨 540100):IP 定位不到时天气工具兜底查此城市
     # ---- 功能开关(每个功能一个开关,on/off;默认 off = 功能未启用,行为与未实现时完全一致)----
     "FEATURE_FAVOR": "off",    # P2 好感度系统
     "FEATURE_THEME": "off",    # P3 话题感知

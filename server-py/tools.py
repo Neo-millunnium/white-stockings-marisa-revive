@@ -92,29 +92,34 @@ _WEATHER_RE = re.compile(r"(天气|气温|温度|下雨|下雪|阴天|晴天)")
 
 
 def _handler_weather(keyword, ip=None):
-    """天气工具(高德):用请求方 IP 定位城市,返回当地实时天气文本。
+    """天气工具(高德):优先用请求方 IP 定位城市,定位不到回退到配置的默认城市。
 
     链路:IP 定位(v3/ip,免费)-> 城市 adcode -> 实时天气(v3/weather)。
     任一步失败/无 key 返回 None,落到普通回复,不影响主流程。
+    AMAP_ADCODE 为默认城市编码(如拉萨 540100):IP 为空/内网/机房 IP 定位不到时兜底。
     """
     key = config.get("AMAP_KEY")
     if not key:
         return None
-    # 1. IP 定位(ip 为空时高德按出口 IP 定位,至少能返回省份)
-    geo = _fetch(_AMAP_IP_API % (key, urllib.parse.quote(ip or "")), max_len=2000)
-    if not geo:
-        return None
-    try:
-        geo_data = json.loads(geo)
-    except Exception:
-        return None
-    if str(geo_data.get("status")) != "1":
-        return None
-    adcode = (geo_data.get("adcode") or "").strip()
-    city_name = (geo_data.get("city") or geo_data.get("province") or "").strip()
+    # 1. IP 定位(仅当有真实公网 IP;空/内网 IP 高德定位不到,直接跳过省一次请求)
+    adcode = ""
+    city_name = ""
+    if ip and ip not in ("127.0.0.1", "localhost", "::1"):
+        geo = _fetch(_AMAP_IP_API % (key, urllib.parse.quote(ip)), max_len=2000)
+        if geo:
+            try:
+                geo_data = json.loads(geo)
+                if str(geo_data.get("status")) == "1":
+                    adcode = (geo_data.get("adcode") or "").strip()
+                    city_name = (geo_data.get("city") or geo_data.get("province") or "").strip()
+            except Exception:
+                pass
+    # 2. IP 定位失败(机房/内网/未知 IP):回退到配置的默认城市
+    if not adcode:
+        adcode = config.get("AMAP_ADCODE").strip()
     if not adcode:
         return None
-    # 2. 查实时天气
+    # 3. 查实时天气
     wea = _fetch(_AMAP_WEATHER_API % (key, adcode), max_len=4000)
     if not wea:
         return None
