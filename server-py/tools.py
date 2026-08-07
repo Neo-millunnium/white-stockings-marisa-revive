@@ -207,9 +207,10 @@ TOOLS = _build_tools()
 
 
 def match_tool(kw, ip=None):
-    """遍历工具注册表,返回第一个命中的非空结果;全部未命中返回 None。
+    """遍历工具注册表,返回第一个命中的非空结果 (name, text);全部未命中返回 None。
 
     ip 为请求方 IP,透传给需要定位的工具(如天气)。
+    返回带工具名,便于上层按工具类型套人设话术。
     """
     if not kw:
         return None
@@ -221,5 +222,5 @@ def match_tool(kw, ip=None):
         except Exception:
             ans = None
         if ans:
-            return ans
+            return name, ans
     return None

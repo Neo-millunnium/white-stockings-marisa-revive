@@ -255,6 +255,23 @@ def overlap_ratio(existing_tokens, input_tokens, stopwords=None):
     return matched / len(existing_tokens)
 
 
+# ---- 工具结果人设话术(魔理沙:元气 / 自称天才 / だぜ / 借书梗)----
+# 每个工具的前缀+后缀;未知工具返回裸文本
+_TOOL_TALK = {
+    "time": ("魔法时钟告诉我:", "。可别把时间浪费掉,魔法研究要紧だぜ!"),
+    "calc": ("本天才的心算魔法给出了答案:", "。这种程度,对本天才来说小菜一碟だぜ!"),
+    "weather": ("我让迷你八卦炉感应了一下天气:", "。嗯,本天才的预报从没错过!"),
+    "dict": ("我去书库查了查(顺便借走几本):", "。这些可都是书里写的,不是我瞎编的!"),
+    "exchange": ("我看了看魔法世界的汇率:", "。钱的事,交给本天才就好!"),
+}
+
+
+def wrap_tool_talk(name, ans):
+    """给工具结果套上魔理沙人设话术;未知工具返回裸文本。"""
+    prefix, suffix = _TOOL_TALK.get(name, ("", ""))
+    return "%s%s%s" % (prefix, ans, suffix)
+
+
 def in_sleep_window(now=None):
     """是否处于深夜催睡时段(凌晨 SLEEP_START ~ SLEEP_END)。
 
@@ -831,9 +848,10 @@ class MemoriseService:
         # 1.5 资讯工具:用户没显式教过时,时间/计算器等工具兜底。
         #     优先级低于精确匹配(教过的关键词永远赢过工具)、高于分词重合;
         #     深夜催睡在最顶部已拦截,工具不会在催睡时段触发。
-        tool_ans = match_tool(kw, ip)
-        if tool_ans:
-            return {"code": 200, "data": {"answer": tool_ans}}
+        tool_result = match_tool(kw, ip)
+        if tool_result:
+            tool_name, tool_ans = tool_result
+            return {"code": 200, "data": {"answer": wrap_tool_talk(tool_name, tool_ans)}}
         # 2. 分词后查倒排索引,收集重合度达到阈值的候选
         #    阈值按词条分类动态取:word 0.4 / sentence 0.3 / logic 0.2 /
         #    syntax 0.4(去虚词后算)/ greeting 0.4(另有精确匹配优先)
