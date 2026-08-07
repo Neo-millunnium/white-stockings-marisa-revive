@@ -508,6 +508,9 @@ onUnmounted(() => {
     width: 202px;
     height: 232px;
     padding: 4px 8px;
+    overflow-y: auto;   /* 指令说明随内容增多,超出滚动而非溢出框体 */
+    overflow-x: hidden; /* 长英文(如 word/sentence/...)折行,不出水平滚动条 */
+    word-break: break-all;
     background: $container-color;
     border: 1px solid $border-color;
     color: $order-blue;
@@ -516,8 +519,8 @@ onUnmounted(() => {
     .system-cmd {
       display: block;
       width: 100%;
-      margin-bottom: 13px;
-      margin-top: 13px;
+      margin-bottom: 10px;
+      margin-top: 10px;
     }
 
     .cmd-collect {
