@@ -9,6 +9,7 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 1. **API 契约不可破坏**:全部接口 `POST + form-urlencoded`,返回 `{code, data}`;HTTP 状态恒 200,业务码在 JSON 里
    - `POST /Add`(ip/keyword/answer/category,教学;category 默认 auto)、`POST /Reply`(**ip**/keyword,提问)、`POST /Forget`(answer)、`POST /Status`、`POST /Categories`(分类统计)、`POST /Hint`、`GET/POST /`(探活)
    - 业务码:`200` 成功、`400` 参数不合法/黑名单/违禁词、`429` 限流(教学每 IP 10 次/分、**回复每 IP 30 次/分**)、`10001` 未命中
+   - Litestar 落地细节(main.py):POST 路由一律用 `post200`(Litestar POST 默认 201,必须 `status_code=200`);表单字段从 `data: Form`(urlencoded body 整体解析为 dict)里 `data.get("x", 默认值)` 取;同步 handler 显式 `sync_to_thread=True`(线程池执行)
 2. **未命中兜底话术是产品逻辑**:`唔嗯...不懂你在说什么呢...教教我吧~`(前后端都有引用,别乱改)
 3. **深夜催睡(3:50-6:00)**:`service.py` 里 `in_sleep_window()` 判断,凌晨 3:50 ~ 6:00 之间 Reply 不查库直接返回固定话术 `SLEEP_ANSWER`,Add 教学也拒绝(返回 code 400 + SLEEP_ANSWER)。文案/时间边界是 `service.py` 顶部常量(SLEEP_START/SLEEP_END/SLEEP_ANSWER)可调。改这块先看常量注释
 4. **AI 内容审核(先审后玩)**:教学内容 Add 后只进**待审队列**(`review_status=pending`),**不立即生效**(不进内存索引,Reply 答不出、Status 不计数);每小时后台任务(`main.py` `_review_loop`,间隔 `REVIEW_INTERVAL`、每批 `REVIEW_BATCH_LIMIT` 条)调 DeepSeek 批量审核,**通过才进索引生效,被拒的回答原文进黑名单**(`blacklist` 表,再次教学同回答直接 400 拒)。**违禁词前处理**:`server-py/banned_words.txt` 每行一个正则,教学时回答命中违禁词直接拒绝+拉黑,不进待审队列(`service.match_banned`)。审核 API key 从环境变量 `DEEPSEEK_API_KEY` 读(见 `review.py`,含 .env 兜底)。`POST /Review`(secret=`REVIEW_SECRET`)可手动触发审核,`POST /Reload`(同 secret)可从库重建索引。改审核逻辑看 `review.py` + `service.review_pending`
@@ -21,7 +22,7 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 
 ## 技术栈
 
-- 后端 `server-py/`:Python 3.11 · FastAPI · SQLAlchemy 2 · jieba 分词
+- 后端 `server-py/`:Python 3.11 · Litestar · SQLAlchemy 2 · jieba 分词
 - 前端 `client/`:Vue 3.5(Composition API)· Vite 8 · TypeScript 5 · Sass
 - 数据库:SQLite(默认,`server-py/webmarisa.db`,零依赖零内存);可选 MySQL/MariaDB(`DB_TYPE=mysql`)
 - `server/`:旧 Go 版,保留参考,**已弃用,不要改**
@@ -29,7 +30,7 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 ## 后端结构(server-py/)
 
 ```
-main.py        FastAPI 入口 + 5 个路由(Add/Reply/Forget/Status/)
+main.py        Litestar 入口 + 15 个路由(Add/Reply/Forget/Status/ 等;POST 统一 status_code=200)
 config.py      配置:.env > 环境变量 > 默认值(SQLite;DB_TYPE=mysql 切 MySQL)
 database.py    SQLAlchemy 引擎 + 启动自动建表(SQLite create_all / MySQL ALTER)
 models.py      Memorise ORM(memoryId 主键,ip/keyword/answer/raw_keyword/hit_count/created_at/updated_at)
@@ -56,7 +57,7 @@ cd server-py && .venv/Scripts/python -m uvicorn main:app --host 127.0.0.1 --port
 cd server-py && .venv/Scripts/python test_api.py
 
 # 注意:本机 python 无 pip,装依赖用 uv(.venv 已存在则无需重装)
-cd server-py && uv pip install fastapi uvicorn sqlalchemy jieba
+cd server-py && uv pip install litestar uvicorn sqlalchemy jieba
 ```
 
 ## 前端结构(client/)

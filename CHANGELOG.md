@@ -2,6 +2,17 @@
 
 本项目的变更记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [2026-08-09]
+
+### Changed
+
+- **后端框架 FastAPI -> Litestar**(`server-py/main.py` 重写,其余模块零改动):
+  - 14 个 POST 路由 + `GET/POST /` 探活一一映射,API 契约不变(form-urlencoded 入参、`{code, data}` 返回、业务码语义)
+  - POST 统一 `status_code=200`(Litestar POST 默认 201,契约要求恒 200),封装 `post200` 装饰器
+  - 表单字段改为 `data: Form`(urlencoded body 整体解析为 dict)后 `data.get("x", 默认值)` 取,缺省语义与原 `Form(默认值)` 一致
+  - 启动/关闭钩子改为 `on_startup`/`on_shutdown`(迁移 -> 重建索引 -> 后台审核任务),ASGI 入口仍为 `app`,uvicorn/gunicorn 启动命令不变
+  - 依赖:`litestar` 替换 `fastapi`(不再需要 python-multipart);`test_api.py` 34 项 + `test_antiinject.py` 3 项全部通过
+
 ## [2026-08-06]
 
 ### Added
