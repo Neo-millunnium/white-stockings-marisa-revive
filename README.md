@@ -11,7 +11,7 @@
 本仓库基于以下项目重构:
 
 - **[TohoOutsiders/web-marisa](https://github.com/TohoOutsiders/web-marisa)** —— 原作者 gutrse3321(Tomonori)于 2018-2019 年发布的网页版"白丝魔理沙"聊天机器人(Go + iris/gin 后端、Vue 2 前端,线上已停服)。本仓库的前后端均以其为蓝本:
-  - 后端:由 Go(iris → gin)重写为 Python FastAPI,业务逻辑(教学/回复/匹配阈值/合并规则)与 API 契约保持一致
+  - 后端:由 Go(iris → gin)重写为 Python Litestar,业务逻辑(教学/回复/匹配阈值/合并规则)与 API 契约保持一致
   - 前端:由 Vue 2 + webpack 重写为 Vue 3 + Vite,界面布局、指令系统、视觉元素(立绘/配色)还原原版
   - 原项目的 `server/`(Go 版)目录在本仓库中保留作参考,已弃用
 - **2010 年的原始调教 bot**(作者孙鸭子)—— 本项目的 `teach`/`forget`/`status` 指令体系和"用户教学驱动"玩法源自那个年代的 QQ 调教 bot 传统,原始实现已失传,机制经原网页版传承至今
@@ -48,7 +48,7 @@
 
 | 层 | 技术 |
 |----|------|
-| 后端 | Python 3.11 · FastAPI · SQLAlchemy 2 · jieba 分词 |
+| 后端 | Python 3.11 · Litestar · SQLAlchemy 2 · jieba 分词 |
 | 前端 | Vue 3.5 · Vite 8 · TypeScript 5 · Sass |
 | 数据库 | SQLite(默认,零依赖零内存);可选 MySQL/MariaDB(`DB_TYPE=mysql`) |
 
@@ -56,8 +56,8 @@
 
 ```
 web-marisa/
-├── server-py/          # Python 后端(FastAPI)
-│   ├── main.py         # 入口:FastAPI + 路由
+├── server-py/          # Python 后端(Litestar)
+│   ├── main.py         # 入口:Litestar + 路由
 │   ├── service.py      # 业务逻辑:分词/匹配/合并/限流
 │   ├── database.py     # SQLAlchemy 引擎 + 启动迁移
 │   ├── models.py       # ORM 模型
@@ -76,7 +76,7 @@ web-marisa/
 ```bash
 # 1. 后端(首次启动自动建表 server-py/webmarisa.db)
 cd server-py
-uv venv && uv pip install fastapi uvicorn sqlalchemy jieba
+uv venv && uv pip install litestar uvicorn sqlalchemy jieba
 uv run python -m uvicorn main:app --host 127.0.0.1 --port 3000
 
 # 2. 前端

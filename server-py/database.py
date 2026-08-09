@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 import config
 import models
 
-# 引擎参数:SQLite 需要 check_same_thread=False(FastAPI 多线程访问)
+# 引擎参数:SQLite 需要 check_same_thread=False(Litestar 多线程访问)
 _engine_kwargs = {"echo": False}
 if config.get("DB_TYPE") == "mysql":
     _engine_kwargs["pool_pre_ping"] = True
