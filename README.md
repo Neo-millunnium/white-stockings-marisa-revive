@@ -48,7 +48,7 @@
 
 | 层 | 技术 |
 |----|------|
-| 后端 | Python 3.11 · Litestar · SQLAlchemy 2 · jieba 分词 |
+| 后端 | Python 3.11 · Litestar · SQLAlchemy 2(全异步 aiosqlite)· aiohttp · jieba 分词 |
 | 前端 | Vue 3.5 · Vite 8 · TypeScript 5 · Sass |
 | 数据库 | SQLite(默认,零依赖零内存);可选 MySQL/MariaDB(`DB_TYPE=mysql`) |
 
@@ -56,13 +56,15 @@
 
 ```
 web-marisa/
-├── server-py/          # Python 后端(Litestar)
-│   ├── main.py         # 入口:Litestar + 路由
-│   ├── service.py      # 业务逻辑:分词/匹配/合并/限流
-│   ├── database.py     # SQLAlchemy 引擎 + 启动迁移
+├── server-py/          # Python 后端(Litestar,全异步)
+│   ├── server.py       # WebMarisaServer:统一入口(conf.yaml + 装配 + run)
+│   ├── conf.example.yaml # 配置模板(复制为 conf.yaml 用;conf.yaml 本地外部配置不入库)
+│   ├── main.py         # Litestar 路由 + create_app 装配(uvicorn main:app)
+│   ├── service.py      # 业务逻辑:分词/匹配/合并/限流(全部协程)
+│   ├── database.py     # SQLAlchemy 异步引擎 + 启动迁移(迁移走同步引擎)
 │   ├── models.py       # ORM 模型
-│   ├── config.py       # 配置(.env / 环境变量 / 默认值)
-│   └── test_api.py     # 接口测试(29 项)
+│   ├── config.py       # 配置(conf.yaml / .env / 环境变量 / 默认值)
+│   └── test_api.py     # 接口测试(34 项)
 ├── client/             # 前端(Vue 3 + Vite)
 │   └── src/            # 聊天室界面、API 封装、样式
 ├── server/             # 旧 Go 版后端(保留参考,已弃用)
@@ -76,8 +78,8 @@ web-marisa/
 ```bash
 # 1. 后端(首次启动自动建表 server-py/webmarisa.db)
 cd server-py
-uv venv && uv pip install litestar uvicorn sqlalchemy jieba
-uv run python -m uvicorn main:app --host 127.0.0.1 --port 3000
+uv venv && uv pip install litestar uvicorn aiohttp aiosqlite sqlalchemy jieba pyyaml
+uv run python server.py   # WebMarisaServer 统一入口,读 conf.yaml,监听 3000
 
 # 2. 前端
 cd ../client
@@ -91,7 +93,8 @@ python seed_qa.py  # 插入 39 条预设问答对
 
 浏览器打开 http://localhost:8888 即可聊天。
 
-> 想用 MySQL/MariaDB?改 `server-py/.env` 里 `DB_TYPE=mysql` 并填 `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`,依赖加上 pymysql,建库后启动自动建表/迁移。
+> 也可以 `uvicorn main:app --host 127.0.0.1 --port 3000` ASGI 直连(测试/生产部署用,行为一致)。
+> 想用 MySQL/MariaDB?改 `conf.yaml` 里 `DB_TYPE=mysql` 并填 `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`,依赖加上 asyncmy,建库后启动自动建表/迁移。
 
 ## API 文档
 

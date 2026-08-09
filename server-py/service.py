@@ -19,11 +19,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import jieba
-from sqlalchemy import text
+from sqlalchemy import delete, select, text
 
 import config
 import models
-from database import SessionLocal
+from database import AsyncSessionLocal
 from safe_eval import safe_eval
 from tools import match_tool
 
@@ -167,12 +167,15 @@ class MemoryIndex:
         self._memories = {}             # memory_id -> MemoryEntry
         self._lock = threading.Lock()   # 简单互斥锁,保证单进程内一致性
 
-    def rebuild(self, session):
-        """启动时从数据库全量重建索引(只加载已过审 approved 的内容)。"""
+    def rebuild(self, rows):
+        """启动时从数据库全量重建索引(只加载已过审 approved 的内容)。
+
+        rows 由调用方(异步会话)查出后传入,本方法只操作内存,不碰数据库。
+        """
         with self._lock:
             self._index.clear()
             self._memories.clear()
-            for row in session.query(models.Memorise).all():
+            for row in rows:
                 entry = self._to_entry(row)
                 if entry.review_status != "approved":
                     continue  # pending 未过审、rejected 被拒的内容都不进入索引,不可回复
@@ -321,18 +324,13 @@ class MemoriseService:
         # 审核黑名单:被拒回答原文的集合(启动时从库加载;add 时先查,命中即拒)
         self.blacklist = set()
 
-    def reload(self):
-        """启动时从数据库重建内存索引 + 加载黑名单。"""
-        session = SessionLocal()
-        try:
-            self.index.rebuild(session)
-            self._load_blacklist(session)
-        finally:
-            session.close()
-
-    def _load_blacklist(self, session):
-        """把 blacklist 表全部读进内存(回答原文精确匹配)。"""
-        self.blacklist = {row.answer for row in session.query(models.Blacklist.answer).all()}
+    async def reload(self):
+        """启动时从数据库重建内存索引 + 加载黑名单(协程)。"""
+        async with AsyncSessionLocal() as session:
+            rows = (await session.execute(select(models.Memorise))).scalars().all()
+            self.index.rebuild(rows)
+            bl = (await session.execute(select(models.Blacklist.answer))).all()
+            self.blacklist = {r[0] for r in bl}
 
     # ---- 限流(轻量防滥用) ----
     def _check_rate_limit(self, ip, logs, limit):
@@ -441,33 +439,33 @@ class MemoriseService:
                 break
         return level
 
-    def _favor_level(self, uid):
+    async def _favor_level(self, uid):
         """查询某 uid 当前好感等级(无记录返回 0)。"""
         if not uid:
             return 0
-        session = SessionLocal()
         try:
-            row = session.query(models.Favorability).filter(models.Favorability.uid == uid).first()
-            return row.level if row else 0
+            async with AsyncSessionLocal() as session:
+                row = await session.scalar(
+                    select(models.Favorability).where(models.Favorability.uid == uid)
+                )
+                return row.level if row else 0
         except Exception:
             return 0
-        finally:
-            session.close()
 
-    def _favor_score(self, uid):
+    async def _favor_score(self, uid):
         """查询某 uid 当前好感分数(theme 打分选择器用;无 uid/异常返回 0)。"""
         if not uid:
             return 0
-        session = SessionLocal()
         try:
-            row = session.query(models.Favorability).filter(models.Favorability.uid == uid).first()
-            return row.score if row else 0
+            async with AsyncSessionLocal() as session:
+                row = await session.scalar(
+                    select(models.Favorability).where(models.Favorability.uid == uid)
+                )
+                return row.score if row else 0
         except Exception:
             return 0
-        finally:
-            session.close()
 
-    def _touch_favor(self, uid, ip, talk=0, teach=0, active_seconds=0, bonus=0):
+    async def _touch_favor(self, uid, ip, talk=0, teach=0, active_seconds=0, bonus=0):
         """好感累计(FEATURE_FAVOR 关闭时无操作):按 uid 主键 upsert 分数与计数。
 
         talk/teach 为对话/教学次数(各乘 FAVOR_SCORE_* 加分),bonus 为额外加分;
@@ -478,57 +476,57 @@ class MemoriseService:
             return
         if not uid:
             return
-        session = SessionLocal()
         try:
-            row = session.query(models.Favorability).filter(models.Favorability.uid == uid).first()
-            if row is None:
-                row = models.Favorability(uid=uid, ip=ip or "", score=0, talk_count=0,
-                                          teach_count=0, active_seconds=0, level=0,
-                                          last_active_at=datetime.now())
-                session.add(row)
-            row.ip = ip or ""
-            row.score += talk * FAVOR_SCORE_TALK + teach * FAVOR_SCORE_TEACH + bonus
-            if active_seconds > 0:
-                row.active_seconds += active_seconds
-                row.score += active_seconds // 60 * FAVOR_SCORE_ACTIVE
-            row.talk_count += talk
-            row.teach_count += teach
-            row.last_active_at = datetime.now()
-            row.level = self._favor_level_for_score(row.score)
-            session.commit()
+            async with AsyncSessionLocal() as session:
+                row = await session.scalar(
+                    select(models.Favorability).where(models.Favorability.uid == uid)
+                )
+                if row is None:
+                    row = models.Favorability(uid=uid, ip=ip or "", score=0, talk_count=0,
+                                              teach_count=0, active_seconds=0, level=0,
+                                              last_active_at=datetime.now())
+                    session.add(row)
+                row.ip = ip or ""
+                row.score += talk * FAVOR_SCORE_TALK + teach * FAVOR_SCORE_TEACH + bonus
+                if active_seconds > 0:
+                    row.active_seconds += active_seconds
+                    row.score += active_seconds // 60 * FAVOR_SCORE_ACTIVE
+                row.talk_count += talk
+                row.teach_count += teach
+                row.last_active_at = datetime.now()
+                row.level = self._favor_level_for_score(row.score)
+                await session.commit()
         except Exception:
             pass  # 好感只是统计信息,失败不影响主流程
-        finally:
-            session.close()
 
-    def favor(self, uid):
+    async def favor(self, uid):
         """查询某 uid 的好感信息(FEATURE_FAVOR 关闭时由路由层 400 拦截)。"""
         uid = (uid or "").strip()
         empty = {"uid": uid, "score": 0, "level": 0, "level_name": FAVOR_LEVELS[0][1],
                  "talk_count": 0, "teach_count": 0, "active_seconds": 0}
         if not uid:
             return {"code": 200, "data": empty}
-        session = SessionLocal()
         try:
-            row = session.query(models.Favorability).filter(models.Favorability.uid == uid).first()
-            if row is None:
-                return {"code": 200, "data": empty}
-            level_name = FAVOR_LEVELS[row.level][1] if 0 <= row.level < len(FAVOR_LEVELS) else FAVOR_LEVELS[0][1]
-            return {"code": 200, "data": {
-                "uid": uid, "score": row.score, "level": row.level, "level_name": level_name,
-                "talk_count": row.talk_count, "teach_count": row.teach_count,
-                "active_seconds": row.active_seconds,
-            }}
+            async with AsyncSessionLocal() as session:
+                row = await session.scalar(
+                    select(models.Favorability).where(models.Favorability.uid == uid)
+                )
+                if row is None:
+                    return {"code": 200, "data": empty}
+                level_name = FAVOR_LEVELS[row.level][1] if 0 <= row.level < len(FAVOR_LEVELS) else FAVOR_LEVELS[0][1]
+                return {"code": 200, "data": {
+                    "uid": uid, "score": row.score, "level": row.level, "level_name": level_name,
+                    "talk_count": row.talk_count, "teach_count": row.teach_count,
+                    "active_seconds": row.active_seconds,
+                }}
         except Exception:
             return {"code": 200, "data": empty}
-        finally:
-            session.close()
 
-    def active(self, uid, ip, seconds):
+    async def active(self, uid, ip, seconds):
         """心跳(P2):上报在线秒数并累计好感(每 uid 每分钟限 1 次,路由层已校验参数)。"""
         if not self._check_active_rate(uid):
             return {"code": 429, "data": "太频繁了,歇一歇吧~"}
-        self._touch_favor(uid, ip, active_seconds=seconds)
+        await self._touch_favor(uid, ip, active_seconds=seconds)
         return {"code": 200, "data": "ok"}
 
     # ---- P3 话题感知(FEATURE_THEME)----
@@ -589,8 +587,8 @@ class MemoriseService:
             return True
         return False
 
-    def _flag_matches(self, entry, uid, now=None):
-        """判断一条带 flag 的记忆是否匹配当前 uid / 好感等级 / 时间段。
+    async def _flag_matches(self, entry, uid, now=None):
+        """判断一条带 flag 的记忆是否匹配当前 uid / 好感等级 / 时间段(协程:favor 判定要查库)。
 
         all 恒 True;user 精确匹配 uid;favor 按好感等级映射(low<=1 / medium=2 / high>=3);
         time 按 FLAG_TIME_WINDOWS(night/dawn 跨午夜,start>=end 时按"跨日"判断)。
@@ -602,7 +600,7 @@ class MemoriseService:
         if flag.startswith("user:"):
             return bool(uid) and uid == flag[len("user:"):]
         if flag.startswith("favor:"):
-            level = self._favor_level(uid)
+            level = await self._favor_level(uid)
             want = flag[len("favor:"):]
             if want == "high":
                 return level >= 3
@@ -624,59 +622,63 @@ class MemoriseService:
         return True
 
     # ---- P5 多人协作 + 调教师权限(FEATURE_MAID)----
-    def _is_blocked(self, uid):
+    async def _is_blocked(self, uid):
         """该 uid 是否被调教师屏蔽(屏蔽只拦教学,不拦提问)。"""
         if not uid:
             return False
-        session = SessionLocal()
         try:
-            return session.query(models.BlockedUser).filter(models.BlockedUser.uid == uid).first() is not None
+            async with AsyncSessionLocal() as session:
+                row = await session.scalar(
+                    select(models.BlockedUser).where(models.BlockedUser.uid == uid)
+                )
+                return row is not None
         except Exception:
             return False
-        finally:
-            session.close()
 
-    def _is_master(self, uid):
+    async def _is_master(self, uid):
         """调教师判定:仅服务端配置 MASTER_UID 或 teacher 表成员(不信任客户端自报身份)。"""
         if not uid:
             return False
         if uid == config.get("MASTER_UID"):
             return True
-        session = SessionLocal()
         try:
-            return session.query(models.Teacher).filter(models.Teacher.uid == uid).first() is not None
+            async with AsyncSessionLocal() as session:
+                row = await session.scalar(
+                    select(models.Teacher).where(models.Teacher.uid == uid)
+                )
+                return row is not None
         except Exception:
             return False
-        finally:
-            session.close()
 
-    def block(self, uid, target_uid, action="block"):
+    async def block(self, uid, target_uid, action="block"):
         """屏蔽 / 解除屏蔽目标 uid(仅调教师可用;FEATURE_MAID 关闭时由路由层 400 拦截)。"""
-        if not self._is_master(uid):
+        if not await self._is_master(uid):
             return {"code": 400, "data": "无权限"}
         target_uid = (target_uid or "").strip()
         if not target_uid:
             return {"code": 400, "data": "参数不合法:缺少 target_uid"}
-        session = SessionLocal()
         try:
-            if action == "block":
-                row = session.query(models.BlockedUser).filter(models.BlockedUser.uid == target_uid).first()
-                if row is None:
-                    session.add(models.BlockedUser(uid=target_uid, blocked_by=uid, created_at=datetime.now()))
-            elif action == "unblock":
-                session.query(models.BlockedUser).filter(models.BlockedUser.uid == target_uid).delete()
-            else:
-                return {"code": 400, "data": "参数不合法:action 只能是 block/unblock"}
-            session.commit()
+            async with AsyncSessionLocal() as session:
+                if action == "block":
+                    row = await session.scalar(
+                        select(models.BlockedUser).where(models.BlockedUser.uid == target_uid)
+                    )
+                    if row is None:
+                        session.add(models.BlockedUser(uid=target_uid, blocked_by=uid, created_at=datetime.now()))
+                elif action == "unblock":
+                    await session.execute(
+                        delete(models.BlockedUser).where(models.BlockedUser.uid == target_uid)
+                    )
+                else:
+                    return {"code": 400, "data": "参数不合法:action 只能是 block/unblock"}
+                await session.commit()
             return {"code": 200, "data": "success"}
         except Exception:
             return {"code": 400, "data": "操作失败"}
-        finally:
-            session.close()
 
     # ---- 教学 ----
-    def add(self, ip, keyword, answer, category="auto", uid="", flag="all"):
-        """教学:限流 -> 校验 -> 分词 -> 子集合并或新增 -> 入库并更新索引。
+    async def add(self, ip, keyword, answer, category="auto", uid="", flag="all"):
+        """教学:限流 -> 校验 -> 分词 -> 子集合并或新增 -> 入库并更新索引(协程)。
 
         category:word/sentence/syntax/logic/greeting/auto(auto 由问候词表自动判定)。
         uid:教学者匿名身份(P5 留痕 + P2 好感);flag:对象判断条件(P4,仅 FEATURE_FLAG 开启时校验)。
@@ -696,7 +698,7 @@ class MemoriseService:
         if not ok_ip:
             return {"code": 429, "data": "教学太频繁了,休息一下吧~"}
         # 1.7 调教师屏蔽检查(FEATURE_MAID 开启时):被屏蔽的 uid 禁止教学
-        if config.is_enabled("MAID") and uid and self._is_blocked(uid):
+        if config.is_enabled("MAID") and uid and await self._is_blocked(uid):
             return {"code": 400, "data": "你被禁止教学了"}
         # 2.5 教学分类校验:teach word/sentence/syntax/logic/greeting/auto;不合法直接拒绝
         cat = (category or "auto").strip().lower()
@@ -730,12 +732,10 @@ class MemoriseService:
         if match_banned(ans):
             # 拉黑:入库 + 内存,防止换个关键词再教同一句
             try:
-                session = SessionLocal()
-                now = datetime.now()
-                session.add(models.Blacklist(answer=ans, created_at=now))
-                session.commit()
+                async with AsyncSessionLocal() as session:
+                    session.add(models.Blacklist(answer=ans, created_at=datetime.now()))
+                    await session.commit()
                 self.blacklist.add(ans)
-                session.close()
             except Exception:
                 pass
             self._record_reject(ip or "")
@@ -766,9 +766,8 @@ class MemoriseService:
                 stored_tokens = list(dict.fromkeys(existing + tokens))  # 有序去重
                 break
         # 6. 入库(仅待审队列):新内容标记 pending,不进入内存索引、不可回复;
-        #    每天 4:00 AI 审核通过后才进索引生效,被拒的回答进黑名单。
-        session = SessionLocal()
-        try:
+        #    每小时 AI 审核通过后才进索引生效,被拒的回答进黑名单。
+        async with AsyncSessionLocal() as session:
             now = datetime.now()
             row = models.Memorise(
                 ip=ip or "",
@@ -784,30 +783,28 @@ class MemoriseService:
                 uid=(uid or "").strip() if config.is_enabled("MAID") else None,
             )
             session.add(row)
-            session.commit()
-            session.refresh(row)  # 取回自增主键 memoryId
+            await session.commit()
+            await session.refresh(row)  # 取回自增主键 memoryId
             # 防注入:教学成功计数(IP 信誉用,窗口内不清零,重启清零)
             with self._rate_lock:
                 self._ip_ok[ip or ""] += 1
-            # 好感度:教学成功 +3(P2,仅 FEATURE_FAVOR 开启且 uid 非空时生效)
-            if config.is_enabled("FAVOR"):
-                self._touch_favor(uid, ip, teach=1)
             # 注意:不调用 self.index.add —— pending 内容不进索引,审核通过才生效
-            return {
-                "code": 200,
-                "data": {
-                    "ip": ip or "",
-                    "keyword": ",".join(stored_tokens),
-                    "answer": ans,
-                    "category": resolved_cat,
-                },
-            }
-        finally:
-            session.close()
+        # 好感度:教学成功 +3(P2,仅 FEATURE_FAVOR 开启且 uid 非空时生效)
+        if config.is_enabled("FAVOR"):
+            await self._touch_favor(uid, ip, teach=1)
+        return {
+            "code": 200,
+            "data": {
+                "ip": ip or "",
+                "keyword": ",".join(stored_tokens),
+                "answer": ans,
+                "category": resolved_cat,
+            },
+        }
 
     # ---- 回复 ----
-    def reply(self, ip, keyword, uid=""):
-        """回复:先精确匹配 raw_keyword;否则分词查索引按重合度 >= 40% 命中。
+    async def reply(self, ip, keyword, uid=""):
+        """回复:先精确匹配 raw_keyword;否则分词查索引按重合度 >= 40% 命中(协程)。
 
         uid(P2/P3/P4 身份层):老客户端不传时按 ip 兜底做上下文键;功能关闭时
         行为与旧版完全一致(精确匹配 -> 资讯工具 -> 重合命中随机选一条)。
@@ -838,17 +835,21 @@ class MemoriseService:
         #    FEATURE_FLAG 开启时:带条件的精确匹配词条也要过 _flag_matches,避免私密台词漏给别人
         exact = [e for e in self.index.all_entries() if e.raw_keyword and e.raw_keyword == kw]
         if config.is_enabled("FLAG"):
-            exact = [e for e in exact if (e.flag or "") == "all" or self._flag_matches(e, uid)]
+            kept = []
+            for e in exact:
+                if (e.flag or "") == "all" or await self._flag_matches(e, uid):
+                    kept.append(e)
+            exact = kept
         if exact:
             chosen = max(exact, key=lambda e: e.memory_id)  # 多条时取最新一条
-            self._bump_hit(chosen)
-            self._touch_favor(uid, ip, talk=1, bonus=2 if any(w in kw for w in FAVOR_PRAISE_WORDS) else 0)
+            await self._bump_hit(chosen)
+            await self._touch_favor(uid, ip, talk=1, bonus=2 if any(w in kw for w in FAVOR_PRAISE_WORDS) else 0)
             answer_text = self._render_answer(chosen)
             return {"code": 200, "data": {"answer": answer_text}}
         # 1.5 资讯工具:用户没显式教过时,时间/计算器等工具兜底。
         #     优先级低于精确匹配(教过的关键词永远赢过工具)、高于分词重合;
         #     深夜催睡在最顶部已拦截,工具不会在催睡时段触发。
-        tool_result = match_tool(kw, ip)
+        tool_result = await match_tool(kw, ip)
         if tool_result:
             tool_name, tool_ans = tool_result
             return {"code": 200, "data": {"answer": wrap_tool_talk(tool_name, tool_ans)}}
@@ -866,7 +867,7 @@ class MemoriseService:
         # 3. 未命中:记录最近未命中的关键词(内存,最多 50 条)+ 落库聚合(待学习清单),返回兜底话术
         if not candidates:
             self.recent_misses.append((time.time(), kw))
-            self._miss_upsert(kw)
+            await self._miss_upsert(kw)
             return {"code": 10001, "data": {"answer": NOT_FOUND_ANSWER}}
         # 4. 命中后选择(FEATURE_FLAG 分组 -> FEATURE_THEME 打分选择器):
         #    - flag 开启:带条件(flag != all)的候选先看有没有满足条件的;有则从中选,
@@ -876,7 +877,10 @@ class MemoriseService:
         if config.is_enabled("FLAG"):
             flagged = [e for e in candidates if (e.flag or "") != "all"]
             unflagged = [e for e in candidates if not (e.flag or "") or (e.flag or "") == "all"]
-            matched = [e for e in flagged if self._flag_matches(e, uid)]
+            matched = []
+            for e in flagged:
+                if await self._flag_matches(e, uid):
+                    matched.append(e)
             if matched:
                 pool = matched
             elif unflagged:
@@ -885,15 +889,15 @@ class MemoriseService:
                 # 全部候选都带条件且当前用户不满足:该问题对 ta 无可用回答,按未命中处理
                 # (不回落全部候选,避免把别人的私密台词/定向台词漏出来)
                 self.recent_misses.append((time.time(), kw))
-                self._miss_upsert(kw)
+                await self._miss_upsert(kw)
                 return {"code": 10001, "data": {"answer": NOT_FOUND_ANSWER}}
         else:
             pool = candidates
         topic_tokens = self._topic_tokens(key) if config.is_enabled("THEME") else []
-        favor_score = self._favor_score(uid) if config.is_enabled("THEME") else 0
+        favor_score = await self._favor_score(uid) if config.is_enabled("THEME") else 0
         chosen = self._pick_candidate(pool, topic_tokens, favor_score)
-        self._bump_hit(chosen)
-        self._touch_favor(uid, ip, talk=1, bonus=2 if any(w in kw for w in FAVOR_PRAISE_WORDS) else 0)
+        await self._bump_hit(chosen)
+        await self._touch_favor(uid, ip, talk=1, bonus=2 if any(w in kw for w in FAVOR_PRAISE_WORDS) else 0)
         answer_text = self._render_answer(chosen)
         return {"code": 200, "data": {"answer": answer_text}}
 
@@ -914,51 +918,49 @@ class MemoriseService:
 
         return re.sub(r"\{([^{}]+)\}", _sub, answer)
 
-    def _bump_hit(self, entry):
-        """命中计数 +1:同步更新内存与数据库。"""
+    async def _bump_hit(self, entry):
+        """命中计数 +1:同步更新内存,异步落库(失败不影响回复)。"""
         entry.hit_count += 1
-        session = SessionLocal()
         try:
-            session.execute(
-                text(
-                    "UPDATE memorise SET hit_count = hit_count + 1, updated_at = :t "
-                    "WHERE memoryId = :id"
-                ),
-                {"t": datetime.now(), "id": entry.memory_id},
-            )
-            session.commit()
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text(
+                        "UPDATE memorise SET hit_count = hit_count + 1, updated_at = :t "
+                        "WHERE memoryId = :id"
+                    ),
+                    {"t": datetime.now(), "id": entry.memory_id},
+                )
+                await session.commit()
         except Exception:
             # 命中计数只是统计信息,失败不影响回复功能
             pass
-        finally:
-            session.close()
 
     # ---- 待学习清单 ----
-    def _miss_upsert(self, kw):
+    async def _miss_upsert(self, kw):
         """未命中关键词落库聚合(待学习清单):count+1、更新 last_seen,首次写入 first_seen。
 
         关键词做归一化(去空白/标点/转小写)后存储,避免 "xx " 与 "xx" 重复计数;
         全符号输入归一化后为空时保留原文,避免落空行。DB 异常不影响主流程(统计信息)。
         """
         norm = re.sub(r"[\s\W_]+", "", kw, flags=re.UNICODE).lower() or kw
-        session = SessionLocal()
         try:
-            now = datetime.now()
-            row = session.query(models.MissKeyword).filter(models.MissKeyword.keyword == norm).first()
-            if row:
-                row.miss_count += 1
-                row.last_seen = now
-            else:
-                session.add(models.MissKeyword(
-                    keyword=norm, miss_count=1, first_seen=now, last_seen=now, resolved_at=None,
-                ))
-            session.commit()
+            async with AsyncSessionLocal() as session:
+                now = datetime.now()
+                row = await session.scalar(
+                    select(models.MissKeyword).where(models.MissKeyword.keyword == norm)
+                )
+                if row:
+                    row.miss_count += 1
+                    row.last_seen = now
+                else:
+                    session.add(models.MissKeyword(
+                        keyword=norm, miss_count=1, first_seen=now, last_seen=now, resolved_at=None,
+                    ))
+                await session.commit()
         except Exception:
             pass
-        finally:
-            session.close()
 
-    def _resolve_misses(self, row, session=None):
+    async def _resolve_misses(self, row, session=None):
         """把已学会的未命中关键词标记为已解决(审核通过时调用),不再出现在待学习清单。
 
         判定条件(任一满足即 resolve,与教学合并同哲学):
@@ -969,17 +971,19 @@ class MemoriseService:
         DB 异常 try/except 兜底,不影响审核主流程。
         """
         own = session is None
-        if own:
-            session = SessionLocal()
         try:
+            if own:
+                session = AsyncSessionLocal()
             approved_raw = (row.raw_keyword or "").strip()
             approved_tokens = set(split_keyword(row.keyword)) if row.keyword else set()
             if not approved_raw and not approved_tokens:
+                if own:
+                    await session.close()
                 return
             now = datetime.now()
-            misses = session.query(models.MissKeyword).filter(
-                models.MissKeyword.resolved_at.is_(None)
-            ).all()
+            misses = (await session.execute(
+                select(models.MissKeyword).where(models.MissKeyword.resolved_at.is_(None))
+            )).scalars().all()
             for miss in misses:
                 if approved_raw and miss.keyword == approved_raw:
                     miss.resolved_at = now
@@ -988,33 +992,32 @@ class MemoriseService:
                     if miss_tokens and miss_tokens <= approved_tokens:
                         miss.resolved_at = now
             if own:
-                session.commit()
+                await session.commit()
         except Exception:
             pass
         finally:
-            if own:
-                session.close()
+            if own and session is not None:
+                await session.close()
 
-    def misses(self):
+    async def misses(self):
         """待学习清单:返回被问过 >=2 次且尚未学会(resolved_at IS NULL)的未命中关键词。
 
         按 miss_count 降序、last_seen 倒序,最多返回 MISS_LIST_MAX 条。
         """
-        session = SessionLocal()
         try:
-            rows = (
-                session.query(models.MissKeyword)
-                .filter(
-                    models.MissKeyword.resolved_at.is_(None),
-                    models.MissKeyword.miss_count >= 2,
-                )
-                .order_by(
-                    models.MissKeyword.miss_count.desc(),
-                    models.MissKeyword.last_seen.desc(),
-                )
-                .limit(MISS_LIST_MAX)
-                .all()
-            )
+            async with AsyncSessionLocal() as session:
+                rows = (await session.execute(
+                    select(models.MissKeyword)
+                    .where(
+                        models.MissKeyword.resolved_at.is_(None),
+                        models.MissKeyword.miss_count >= 2,
+                    )
+                    .order_by(
+                        models.MissKeyword.miss_count.desc(),
+                        models.MissKeyword.last_seen.desc(),
+                    )
+                    .limit(MISS_LIST_MAX)
+                )).scalars().all()
             return {
                 "code": 200,
                 "data": {
@@ -1031,42 +1034,39 @@ class MemoriseService:
         except Exception:
             # DB 异常时返回空清单,不影响主流程
             return {"code": 200, "data": {"list": []}}
-        finally:
-            session.close()
 
     # ---- 忘记 ----
-    def forget(self, answer, requester_uid=""):
+    async def forget(self, answer, requester_uid=""):
         """按 answer 精确删除(可删除多条同 answer 的记录),成功返回 success。
 
         requester_uid(FEATURE_MAID 开启时):非调教师只能删自己教的行(uid == requester_uid),
         历史 NULL 数据仅调教师可删;关闭时行为与旧版完全一致(删除全部匹配行)。
         """
         ans = (answer or "").strip()
-        session = SessionLocal()
-        try:
-            rows = session.query(models.Memorise).filter(models.Memorise.answer == ans).all()
+        async with AsyncSessionLocal() as session:
+            rows = (await session.execute(
+                select(models.Memorise).where(models.Memorise.answer == ans)
+            )).scalars().all()
             # P5 多人协作权限:非调教师只能删自己的行(留痕 uid == requester_uid)
             if config.is_enabled("MAID"):
-                if not self._is_master(requester_uid):
+                if not await self._is_master(requester_uid):
                     rows = [r for r in rows if r.uid and r.uid == requester_uid]
             ids = [r.memory_id for r in rows]
             # 先从内存索引移除,避免删除过程中被 Reply 命中到已删数据
             for mid in ids:
                 self.index.remove(mid)
             for r in rows:
-                session.delete(r)
-            session.commit()
-            return {"code": 200, "data": "success"}
-        finally:
-            session.close()
+                await session.delete(r)
+            await session.commit()
+        return {"code": 200, "data": "success"}
 
     # ---- 状态 ----
-    def status(self):
+    async def status(self):
         """返回当前记忆总条数。"""
         return {"code": 200, "data": self.index.count()}
 
     # ---- 分类统计 ----
-    def categories(self):
+    async def categories(self):
         """各教学分类的记忆条数(仅已生效的 approved 索引),旧数据无分类计为 unclassified。"""
         stats = {c: 0 for c in ("word", "sentence", "syntax", "logic", "greeting")}
         stats["unclassified"] = 0
@@ -1079,7 +1079,7 @@ class MemoriseService:
         return {"code": 200, "data": stats}
 
     # ---- greeting 开场白 ----
-    def greeting_rand(self):
+    async def greeting_rand(self):
         """随机返回一条 greeting 分类记忆作为开场白(用户访问网站时由前端自动发送)。
 
         对应 2010-2011 原版语义:greeting 类教学的是"开场白"——bot 主动说的欢迎语,
@@ -1098,7 +1098,7 @@ class MemoriseService:
         }
 
     # ---- hint 提示线索 ----
-    def hint(self):
+    async def hint(self):
         """随机返回一条已审核通过的记忆作为\"提示线索\"。
 
         对应界面的 hint 指令(查看其他人自定义的内容提示或小小线索)。
@@ -1118,11 +1118,11 @@ class MemoriseService:
         }
 
     # ---- AI 内容审核 ----
-    def review_pending(self, limit=None, reviewer=None):
-        """批量审核待审核内容(每天 4:00 定时调用)。
+    async def review_pending(self, limit=None, reviewer=None):
+        """批量审核待审核内容(每小时定时任务调用,协程)。
 
         - 取最多 limit 条 pending 内容(默认 REVIEW_DAILY_LIMIT,由调用方传入)
-        - reviewer 为可调用对象 f(keyword, answer) -> {"violate": bool, "reason": str};
+        - reviewer 为异步可调用对象 async f(keyword, answer) -> {"violate": bool, "reason": str};
           未传则用 review.review_text
         - 违规:回答原文写入黑名单(库 + 内存),并从数据库删除(彻底清除,不可回复)
         - 正常:标记 approved,并加入内存索引(此时才真正生效、可被回复)
@@ -1132,19 +1132,17 @@ class MemoriseService:
         import review as review_mod
 
         reviewer = reviewer or review_mod.review_text
-        session = SessionLocal()
-        try:
-            pending = (
-                session.query(models.Memorise)
-                .filter(models.Memorise.review_status == "pending")
+        async with AsyncSessionLocal() as session:
+            pending = (await session.execute(
+                select(models.Memorise)
+                .where(models.Memorise.review_status == "pending")
                 .order_by(models.Memorise.memory_id)
                 .limit(limit)
-                .all()
-            )
+            )).scalars().all()
             reviewed = rejected = errors = 0
             for row in pending:
                 try:
-                    verdict = reviewer(row.keyword or "", row.answer or "")
+                    verdict = await reviewer(row.keyword or "", row.answer or "")
                 except Exception:
                     errors += 1
                     continue  # API 失败保持 pending,下轮重试
@@ -1153,7 +1151,7 @@ class MemoriseService:
                     now = datetime.now()
                     bl = models.Blacklist(answer=row.answer or "", created_at=now)
                     session.add(bl)
-                    session.delete(row)
+                    await session.delete(row)
                     self.blacklist.add(row.answer or "")
                     rejected += 1
                 else:
@@ -1167,9 +1165,7 @@ class MemoriseService:
                         row.flag or "all",
                     ))
                     # 待学习清单:该关键词已学会,把对应未命中记录标记为已解决(用同一会话避免写锁冲突)
-                    self._resolve_misses(row, session)
+                    await self._resolve_misses(row, session)
                 reviewed += 1
-            session.commit()
-            return {"reviewed": reviewed, "rejected": rejected, "errors": errors}
-        finally:
-            session.close()
+            await session.commit()
+        return {"reviewed": reviewed, "rejected": rejected, "errors": errors}

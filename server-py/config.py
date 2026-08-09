@@ -46,6 +46,36 @@ if _ENV_PATH.exists():
 
 # 审核用的 DeepSeek key 也可放在 server-py/.env 的 DEEPSEEK_API_KEY(不入库)
 
+# server-py/conf.yaml(WebMarisaServer 统一配置文件)
+_YAML_PATH = Path(__file__).resolve().parent / "conf.yaml"
+
+
+def load_yaml(path=None):
+    """加载 YAML 配置文件(conf.yaml),逐项写入环境变量。
+
+    用 setdefault 写入,不覆盖已有环境变量,也不覆盖先加载的配置文件:
+    优先级为 环境变量 > 先加载的 yaml > 后加载的 yaml > .env > 默认值。
+    键名与环境变量一致(大小写不敏感,统一转大写);文件缺失/解析失败/pyyaml
+    未安装时静默跳过(此时配置链退化为 env > .env > 默认值,行为与旧版一致)。
+    """
+    p = Path(path) if path else _YAML_PATH
+    if not p.exists():
+        return
+    try:
+        import yaml
+        data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    for key, value in data.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            # YAML 里 on/off/true/false 会被解析成布尔;还原成功能开关约定的 on/off
+            value = "on" if value else "off"
+        os.environ.setdefault(str(key).strip().upper(), str(value).strip())
+
 
 def get(name: str) -> str:
     """读取配置项:环境变量 > .env > 默认值。"""
@@ -80,3 +110,17 @@ def database_url() -> str:
     if not os.path.isabs(db_file):
         db_file = str(Path(__file__).resolve().parent / db_file)
     return "sqlite:///" + db_file.replace("\\", "/")
+
+
+def async_database_url() -> str:
+    """异步驱动连接串(业务会话用;迁移仍走同步 database_url)。
+
+    - sqlite -> sqlite+aiosqlite(依赖 aiosqlite)
+    - mysql  -> mysql+asyncmy(需另行安装 asyncmy,替代 pymysql)
+    """
+    url = database_url()
+    if url.startswith("sqlite:///"):
+        return "sqlite+aiosqlite:///" + url[len("sqlite:///"):]
+    if url.startswith("mysql+pymysql://"):
+        return "mysql+asyncmy://" + url[len("mysql+pymysql://"):]
+    return url

@@ -1,0 +1,37 @@
+# web-marisa 后端配置示例(conf.example.yaml)
+# 用法:复制为 server-py/conf.yaml 再按需修改;conf.yaml 是本地外部配置,不入库(已 gitignore),
+# 也可给 WebMarisaServer / python server.py 传任意外部路径。缺失时走 .env / 内置默认值。
+# 优先级:环境变量 > 本文件 > .env > 内置默认值。键名与环境变量一致(大小写不敏感)。
+# 注意:布尔写法 on/off/true/false 会被 YAML 解析成布尔再还原为开关字符串,建议照下面加引号。
+
+# ---- 服务 ----
+HTTP_PORT: "3000"         # 后端监听端口
+
+# ---- 数据库(默认 SQLite 零依赖;MySQL/MariaDB 改 DB_TYPE: mysql 并解开下面注释)----
+DB_TYPE: sqlite           # sqlite 或 mysql
+DB_FILE: webmarisa.db     # SQLite 文件(相对 server-py/ 目录)
+# DB_HOST: "127.0.0.1"
+# DB_PORT: "3306"
+# DB_USER: root
+# DB_PASSWORD: ""
+# DB_NAME: webmarisa
+
+# ---- 审核 ----
+REVIEW_SECRET: ""         # POST /Review 与 /Reload 的密钥(为空=禁用这两个接口)
+# DEEPSEEK_API_KEY: ""    # AI 内容审核 key(不入库;也可放环境变量)
+
+# ---- 资讯工具(在线 API,留空=禁用;时间/计算器是离线工具恒启用)----
+EXCHANGE_API: ""          # 汇率工具 URL 模板(含 {keyword} 占位符)
+DICT_API: ""              # 百科/词典工具 URL 模板(萌娘百科 extracts,见 tools.py)
+AMAP_KEY: ""              # 高德 Web 服务 key(配置后启用 IP 定位 + 实时天气)
+AMAP_ADCODE: ""           # 默认城市 adcode:IP 定位不到时天气工具兜底查此城市
+
+# ---- 功能开关(on/off,默认 off = 与未实现时行为一致)----
+FEATURE_FAVOR: "off"      # P2 好感度系统
+FEATURE_THEME: "off"      # P3 话题感知
+FEATURE_FLAG: "off"       # P4 对象判断 flag
+FEATURE_MAID: "off"       # P5 多人协作 + 调教师权限
+FEATURE_CODE: "off"       # P6 代码执行模板
+
+# ---- P5 调教师 ----
+MASTER_UID: ""            # 首个调教师 uid(权限判定只信这个配置,不信客户端自报)

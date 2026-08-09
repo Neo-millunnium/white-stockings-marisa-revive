@@ -9,7 +9,8 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 1. **API 契约不可破坏**:全部接口 `POST + form-urlencoded`,返回 `{code, data}`;HTTP 状态恒 200,业务码在 JSON 里
    - `POST /Add`(ip/keyword/answer/category,教学;category 默认 auto)、`POST /Reply`(**ip**/keyword,提问)、`POST /Forget`(answer)、`POST /Status`、`POST /Categories`(分类统计)、`POST /Hint`、`GET/POST /`(探活)
    - 业务码:`200` 成功、`400` 参数不合法/黑名单/违禁词、`429` 限流(教学每 IP 10 次/分、**回复每 IP 30 次/分**)、`10001` 未命中
-   - Litestar 落地细节(main.py):POST 路由一律用 `post200`(Litestar POST 默认 201,必须 `status_code=200`);表单字段从 `data: Form`(urlencoded body 整体解析为 dict)里 `data.get("x", 默认值)` 取;同步 handler 显式 `sync_to_thread=True`(线程池执行)
+   - Litestar 落地细节(main.py):POST 路由一律用 `post200`(Litestar POST 默认 201,必须 `status_code=200`);表单字段从 `data: Form`(urlencoded body 整体解析为 dict)里 `data.get("x", 默认值)` 取;handler 全部是协程,业务层(service)公开方法全是 async,调用必须 await
+   - 异步边界:外发 HTTP(DeepSeek 审核 / 在线资讯工具)走 aiohttp 共享会话(懒加载,shutdown 关闭);DB 全走异步会话 `AsyncSessionLocal`(aiosqlite;MySQL 需 asyncmy);启动迁移是唯一同步 DB 操作(to_thread 执行);jieba/内存索引是 CPU 操作保持同步内联
 2. **未命中兜底话术是产品逻辑**:`唔嗯...不懂你在说什么呢...教教我吧~`(前后端都有引用,别乱改)
 3. **深夜催睡(3:50-6:00)**:`service.py` 里 `in_sleep_window()` 判断,凌晨 3:50 ~ 6:00 之间 Reply 不查库直接返回固定话术 `SLEEP_ANSWER`,Add 教学也拒绝(返回 code 400 + SLEEP_ANSWER)。文案/时间边界是 `service.py` 顶部常量(SLEEP_START/SLEEP_END/SLEEP_ANSWER)可调。改这块先看常量注释
 4. **AI 内容审核(先审后玩)**:教学内容 Add 后只进**待审队列**(`review_status=pending`),**不立即生效**(不进内存索引,Reply 答不出、Status 不计数);每小时后台任务(`main.py` `_review_loop`,间隔 `REVIEW_INTERVAL`、每批 `REVIEW_BATCH_LIMIT` 条)调 DeepSeek 批量审核,**通过才进索引生效,被拒的回答原文进黑名单**(`blacklist` 表,再次教学同回答直接 400 拒)。**违禁词前处理**:`server-py/banned_words.txt` 每行一个正则,教学时回答命中违禁词直接拒绝+拉黑,不进待审队列(`service.match_banned`)。审核 API key 从环境变量 `DEEPSEEK_API_KEY` 读(见 `review.py`,含 .env 兜底)。`POST /Review`(secret=`REVIEW_SECRET`)可手动触发审核,`POST /Reload`(同 secret)可从库重建索引。改审核逻辑看 `review.py` + `service.review_pending`
@@ -22,7 +23,7 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 
 ## 技术栈
 
-- 后端 `server-py/`:Python 3.11 · Litestar · SQLAlchemy 2 · jieba 分词
+- 后端 `server-py/`:Python 3.11 · Litestar · SQLAlchemy 2(全异步 aiosqlite)· aiohttp · jieba 分词
 - 前端 `client/`:Vue 3.5(Composition API)· Vite 8 · TypeScript 5 · Sass
 - 数据库:SQLite(默认,`server-py/webmarisa.db`,零依赖零内存);可选 MySQL/MariaDB(`DB_TYPE=mysql`)
 - `server/`:旧 Go 版,保留参考,**已弃用,不要改**
@@ -30,12 +31,16 @@ web-marisa:「白丝魔理沙」网页聊天机器人,一个**可教化的关键
 ## 后端结构(server-py/)
 
 ```
-main.py        Litestar 入口 + 15 个路由(Add/Reply/Forget/Status/ 等;POST 统一 status_code=200)
-config.py      配置:.env > 环境变量 > 默认值(SQLite;DB_TYPE=mysql 切 MySQL)
-database.py    SQLAlchemy 引擎 + 启动自动建表(SQLite create_all / MySQL ALTER)
+server.py      WebMarisaServer:统一入口(conf.yaml + create_app 装配 + uvicorn run),python server.py
+conf.example.yaml 配置模板;复制为 conf.yaml 用(本地外部配置,gitignore 不入库;缺失走 .env/默认值)
+main.py        Litestar 路由(15 个)+ create_app() 装配;POST 统一 status_code=200;uvicorn main:app
+config.py      配置:环境变量 > conf.yaml > .env > 默认值(SQLite;DB_TYPE=mysql 切 MySQL)
+database.py    异步引擎(async_engine/AsyncSessionLocal,aiosqlite)+ 同步引擎(仅启动迁移用)
 models.py      Memorise ORM(memoryId 主键,ip/keyword/answer/raw_keyword/hit_count/created_at/updated_at)
-service.py     核心业务:分词/匹配/子集合并/限流/倒排索引/未命中记录
-test_api.py    接口测试(29 项,urllib 连 127.0.0.1:3000 + SQLAlchemy 读 SQLite 校验)
+service.py     核心业务(全部协程):分词/匹配/子集合并/限流/倒排索引/未命中记录/审核/好感/屏蔽
+review.py      DeepSeek 审核客户端(aiohttp 异步,共享会话懒加载 + close_session)
+tools.py       资讯工具注册表(aiohttp 异步;时间/计算器离线,天气/汇率/词典可插拔)
+test_api.py    接口测试(34 项,urllib 连 127.0.0.1:3000 + SQLAlchemy 读 SQLite 校验)
 webmarisa.db   SQLite 数据文件(不入库,由程序生成)
 ```
 
@@ -50,14 +55,17 @@ webmarisa.db   SQLite 数据文件(不入库,由程序生成)
 ### 后端常用命令
 
 ```bash
-# 启动(端口 3000 是正式端口;config 默认 3100,靠 .env 或命令行覆盖)
+# 启动(WebMarisaServer 统一入口,读 conf.yaml,端口 3000)
+cd server-py && .venv/Scripts/python server.py
+
+# 或 ASGI 直连(测试/生产部署;行为一致)
 cd server-py && .venv/Scripts/python -m uvicorn main:app --host 127.0.0.1 --port 3000
 
 # 测试(需后端在跑,且连 127.0.0.1:3000)
 cd server-py && .venv/Scripts/python test_api.py
 
 # 注意:本机 python 无 pip,装依赖用 uv(.venv 已存在则无需重装)
-cd server-py && uv pip install litestar uvicorn sqlalchemy jieba
+cd server-py && uv pip install litestar uvicorn aiohttp aiosqlite sqlalchemy jieba pyyaml
 ```
 
 ## 前端结构(client/)
