@@ -12,6 +12,11 @@
   - 表单字段改为 `data: Form`(urlencoded body 整体解析为 dict)后 `data.get("x", 默认值)` 取,缺省语义与原 `Form(默认值)` 一致
   - 启动/关闭钩子改为 `on_startup`/`on_shutdown`(迁移 -> 重建索引 -> 后台审核任务),ASGI 入口仍为 `app`,uvicorn/gunicorn 启动命令不变
   - 依赖:`litestar` 替换 `fastapi`(不再需要 python-multipart);`test_api.py` 34 项 + `test_antiinject.py` 3 项全部通过
+- **全面异步化(urllib -> aiohttp,SQLAlchemy -> asyncio)**:
+  - 外发 HTTP 全改 aiohttp 共享会话(懒加载 + shutdown 回收):`review.py` DeepSeek 审核(30s 超时)、`tools.py` 在线资讯工具(5s 超时);消除了每小时批量审核最坏冻结事件循环约 5 分钟的隐患(该缺陷自 FastAPI 版继承)
+  - `database.py` 增异步引擎 `AsyncSessionLocal`(aiosqlite;MySQL 模式需 asyncmy);`service.py` 全部公开方法改协程,查询统一改 2.0 风格 `select()`(AsyncSession 不支持 `session.query`);启动迁移保留同步引擎(to_thread 执行)
+  - 异步链传导:`match_tool`/`reply`/`review_pending`/`add`/`forget` 等全部 await;`main.py` 15 个 handler 全改协程(不再用线程池)
+- **服务架构规范化(WebMarisaServer)**:新增 `server.py` —— `WebMarisaServer(config_path)` 统一管配置加载、应用装配(`create_app()`)与 `run()`(uvicorn);新增 YAML 配置文件支持(优先级:环境变量 > conf.yaml > .env > 默认值,`config.load_yaml` 加载,缺文件静默回退);`conf.yaml` 为本地外部配置(gitignore 不入库),仓库内置模板 `conf.example.yaml`;`python server.py` 为推荐启动方式,`uvicorn main:app` ASGI 直连保留(测试/部署不变)
 
 ## [2026-08-06]
 

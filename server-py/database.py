@@ -2,25 +2,33 @@
 """
 数据库模块:创建 SQLAlchemy 引擎与会话工厂,并提供启动时自动建表/迁移。
 
+- 业务会话:异步引擎(async_engine / AsyncSessionLocal,aiosqlite;MySQL 需 asyncmy)
+- 启动迁移:同步引擎(engine / run_migrations,DDL 一次性操作,保持同步简单可靠)
 - SQLite(默认,DB_TYPE=sqlite):启动时 CREATE TABLE IF NOT EXISTS(含全部列),无需迁移
 - MySQL/MariaDB(DB_TYPE=mysql):检查 memorise 表缺少的新增列,执行 ALTER TABLE(幂等)
 """
 from sqlalchemy import create_engine, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 import config
 import models
 
-# 引擎参数:SQLite 需要 check_same_thread=False(Litestar 多线程访问)
+# 同步引擎参数:仅用于启动迁移;SQLite 需要 check_same_thread=False(测试脚本等多线程访问)
 _engine_kwargs = {"echo": False}
 if config.get("DB_TYPE") == "mysql":
     _engine_kwargs["pool_pre_ping"] = True
 else:
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
 
-# 全局引擎(惰性连接)与会话工厂
+# 同步引擎(惰性连接)与会话工厂:启动迁移 / 测试脚本直连用
 engine = create_engine(config.database_url(), **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+# 异步引擎与异步会话工厂:业务代码全部走这里(全异步)。
+# expire_on_commit=False:commit 后访问 ORM 属性不触发异步懒加载(业务代码到处这么用)。
+async_engine = create_async_engine(config.async_database_url(), echo=False)
+AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False)
 
 # 新增列清单(仅 MySQL 需要:列名 -> ALTER 语句)
 _ADD_COLUMNS = {

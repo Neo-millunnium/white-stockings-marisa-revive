@@ -344,14 +344,14 @@ class BlockedUser(Base):
 无业务改动。这是运维与验证方案。
 
 ### MySQL 模式实测步骤
-1. 依赖:`cd server-py && uv pip install pymysql`。
-2. `.env` 配置:`DB_TYPE=mysql`、`DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`(参考 `config.py:11-21`)。
-3. 启动:`main.py` 的 `lifespan`(`main.py:53-66`)会走 `database.run_migrations()`(`database.py:48`)自动建表/补列(含 blacklist 与新表)。
+1. 依赖:`cd server-py && uv pip install asyncmy pymysql`(业务会话走 asyncmy;启动迁移的同步引擎走 pymysql)。
+2. `conf.yaml`(或 `.env`)配置:`DB_TYPE=mysql`、`DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`(参考 `config.py`)。
+3. 启动:`main.py` 的 `on_startup` 钩子会走 `database.run_migrations()` 自动建表/补列(含 blacklist 与新表)。
 4. 验证清单:
-   - 中文写入/读出无乱码(`charset=utf8`,`config.py:53`);
-   - 跑 `server-py/test_api.py`(BASE 指向 MySQL 实例)29 项全绿;
-   - 并发写(多 IP 教学)确认 `pool_pre_ping=True`(`database.py:17`)生效;
-   - 重启后数据保留、索引重建正常(`svc.reload()` `service.py:276`)。
+   - 中文写入/读出无乱码(`charset=utf8`);
+   - 跑 `server-py/test_api.py`(BASE 指向 MySQL 实例)34 项全绿;
+   - 并发写(多 IP 教学)确认 `pool_pre_ping=True` 生效;
+   - 重启后数据保留、索引重建正常(`svc.reload()`)。
 5. 已知差异:`_ADD_COLUMNS` 是 MySQL ALTER 幂等(`database.py:26-33`),SQLite 老库补列走同一 dict,双库保持一致。
 
 ### gunicorn 多进程内存索引一致性方案
@@ -375,7 +375,7 @@ class BlockedUser(Base):
 - gunicorn 方案 B 下,Add 后 ≤60s reader 可答出(Reload 周期内)。
 
 ### 依赖与风险
-- MySQL 需装 pymysql;gunicorn 是 Linux 部署(Windows 本机 dev 仍用 uvicorn)。风险:方案 B 的写路由实现要避免多 writer 同时写(必须只有一个 writer);Reload 全量重建在数据量增大后耗时上升(当前量级无压力,预留阈值告警即可)。
+- MySQL 需装 asyncmy(异步业务会话)+ pymysql(同步迁移);gunicorn 是 Linux 部署(Windows 本机 dev 仍用 uvicorn)。风险:方案 B 的写路由实现要避免多 writer 同时写(必须只有一个 writer);Reload 全量重建在数据量增大后耗时上升(当前量级无压力,预留阈值告警即可)。
 
 ---
 

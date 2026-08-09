@@ -3,14 +3,16 @@
 资讯工具注册表:正则命中即返回动态答案(时间/计算器离线;天气/汇率/词典可插拔默认关)。
 
 命中优先级由 service.reply() 控制:精确匹配(用户显式教过) > 资讯工具 > 分词重合匹配。
-所有 handler 返回字符串或 None;失败返回 None 落到普通回复(不影响主流程)。
-在线工具复用 urllib + 5s 超时(不加 requests),校园网外网不稳时配置留空即禁用。
+所有 handler 为协程(统一签名,离线工具也不例外),返回字符串或 None;
+失败返回 None 落到普通回复(不影响主流程)。
+在线工具用 aiohttp 共享会话(全异步)+ 超时,校园网外网不稳时配置留空即禁用。
 """
 import json
 import re
 import urllib.parse
-import urllib.request
 from datetime import datetime
+
+import aiohttp
 
 import config
 from safe_eval import safe_eval
@@ -18,12 +20,32 @@ from safe_eval import safe_eval
 # 星期中文名(datetime.weekday():0=周一)
 _WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
+# 模块级共享会话(懒加载,首次调用时在当前事件循环内创建;shutdown 时 close_session 回收)
+_session: "aiohttp.ClientSession | None" = None
+_UA = {"User-Agent": "Mozilla/5.0 (marisa-bot; web-marisa)"}
+
+
+def _get_session() -> aiohttp.ClientSession:
+    """取共享 aiohttp 会话(懒加载;已关闭时重建)。带浏览器 UA:部分站点(如萌娘百科)拒绝默认 UA。"""
+    global _session
+    if _session is None or _session.closed:
+        _session = aiohttp.ClientSession(headers=_UA)
+    return _session
+
+
+async def close_session():
+    """关闭共享会话(Litestar on_shutdown 调用)。"""
+    global _session
+    if _session is not None and not _session.closed:
+        await _session.close()
+    _session = None
+
 # ---- 内置离线工具(零依赖,默认启用)----
 _TIME_RE = re.compile(r"(现在|几点|什么时间|日期|几号|星期|年月日)")
 
 
-def _handler_time(keyword, ip=None):
-    """时间/日期工具:返回当前时间文本(现在是 YYYY-MM-DD HH:MM 星期X)。"""
+async def _handler_time(keyword, ip=None):
+    """时间/日期工具:返回当前时间文本(现在是 YYYY-MM-DD HH:MM 星期X,离线纯计算)。"""
     now = datetime.now()
     return "现在是 %04d-%02d-%02d %02d:%02d %s" % (
         now.year, now.month, now.day, now.hour, now.minute, _WEEKDAYS[now.weekday()],
@@ -34,7 +56,7 @@ def _handler_time(keyword, ip=None):
 _CALC_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*([+\-*/])\s*(-?\d+(?:\.\d+)?)\s*$")
 
 
-def _handler_calc(keyword, ip=None):
+async def _handler_calc(keyword, ip=None):
     """计算器工具:用 safe_eval 白名单求值(禁裸 eval),除零/异常/超大数返回 None。"""
     m = _CALC_RE.match(keyword)
     if not m:
@@ -48,19 +70,15 @@ def _handler_calc(keyword, ip=None):
 
 
 # ---- 在线工具(可插拔,配置了对应 API 才注册;默认关)----
-def _fetch(url, timeout=5, max_len=200):
-    """带超时的 GET 请求,失败/超时返回 None(在线工具不可用时静默降级)。
+async def _fetch(url, timeout=5, max_len=200):
+    """带超时的 GET 请求(aiohttp 异步),失败/超时返回 None(在线工具不可用时静默降级)。
 
     max_len 控制返回文本截断长度:文本类工具(汇率/词典)用默认 200 足够;
     需要解析 JSON 的工具(天气/百科)必须传足量长度,否则截断会破坏 JSON。
-    带浏览器 UA:部分站点(如萌娘百科)会拒绝 Python-urllib 默认 UA。
     """
     try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "Mozilla/5.0 (marisa-bot; web-marisa)"}
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
+        async with _get_session().get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            raw = await resp.text(errors="ignore")
     except Exception:
         return None
     text = re.sub(r"\s+", " ", raw).strip()
@@ -74,12 +92,12 @@ def _make_online(pattern, api_key):
     """
     pat = re.compile(pattern)
 
-    def handler(keyword, ip=None):
+    async def handler(keyword, ip=None):
         api = config.get(api_key)
         if not api:
             return None
         url = api.replace("{keyword}", urllib.parse.quote(keyword))
-        return _fetch(url)
+        return await _fetch(url)
 
     return pat, handler
 
@@ -91,7 +109,7 @@ _AMAP_WEATHER_API = "https://restapi.amap.com/v3/weather/weatherInfo?key=%s&city
 _WEATHER_RE = re.compile(r"(天气|气温|温度|下雨|下雪|阴天|晴天)")
 
 
-def _handler_weather(keyword, ip=None):
+async def _handler_weather(keyword, ip=None):
     """天气工具(高德):优先用请求方 IP 定位城市,定位不到回退到配置的默认城市。
 
     链路:IP 定位(v3/ip,免费)-> 城市 adcode -> 实时天气(v3/weather)。
@@ -105,7 +123,7 @@ def _handler_weather(keyword, ip=None):
     adcode = ""
     city_name = ""
     if ip and ip not in ("127.0.0.1", "localhost", "::1"):
-        geo = _fetch(_AMAP_IP_API % (key, urllib.parse.quote(ip)), max_len=2000)
+        geo = await _fetch(_AMAP_IP_API % (key, urllib.parse.quote(ip)), max_len=2000)
         if geo:
             try:
                 geo_data = json.loads(geo)
@@ -120,7 +138,7 @@ def _handler_weather(keyword, ip=None):
     if not adcode:
         return None
     # 3. 查实时天气
-    wea = _fetch(_AMAP_WEATHER_API % (key, adcode), max_len=4000)
+    wea = await _fetch(_AMAP_WEATHER_API % (key, adcode), max_len=4000)
     if not wea:
         return None
     try:
@@ -144,7 +162,7 @@ def _handler_weather(keyword, ip=None):
 _DICT_RE = re.compile(r"(什么是|什么意思|释义|介绍一下|是谁|百科)")
 
 
-def _handler_dict(keyword, ip=None):
+async def _handler_dict(keyword, ip=None):
     """百科工具(萌娘百科):取词条开头摘要(已审核的社区内容),返回前 120 字。
 
     DICT_API 是 URL 模板,{keyword} 替换为 URL 编码后的输入;
@@ -160,7 +178,7 @@ def _handler_dict(keyword, ip=None):
     if not q:
         return None
     url = api.replace("{keyword}", urllib.parse.quote(q))
-    raw = _fetch(url, max_len=4000)
+    raw = await _fetch(url, max_len=4000)
     if not raw:
         return None
     try:
@@ -180,7 +198,7 @@ def _handler_dict(keyword, ip=None):
 
 
 # ---- 工具注册表 ----
-# TOOL = (name, compiled_regex, handler(keyword, ip) -> Optional[str])
+# TOOL = (name, compiled_regex, async handler(keyword, ip) -> Optional[str])
 def _build_tools():
     tools = [
         ("time", _TIME_RE, _handler_time),
@@ -206,8 +224,8 @@ def _build_tools():
 TOOLS = _build_tools()
 
 
-def match_tool(kw, ip=None):
-    """遍历工具注册表,返回第一个命中的非空结果 (name, text);全部未命中返回 None。
+async def match_tool(kw, ip=None):
+    """遍历工具注册表,返回第一个命中的非空结果 (name, text);全部未命中返回 None(协程)。
 
     ip 为请求方 IP,透传给需要定位的工具(如天气)。
     返回带工具名,便于上层按工具类型套人设话术。
@@ -218,7 +236,7 @@ def match_tool(kw, ip=None):
         if not pat.search(kw):
             continue
         try:
-            ans = handler(kw, ip)
+            ans = await handler(kw, ip)
         except Exception:
             ans = None
         if ans:
