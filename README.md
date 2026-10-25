@@ -78,7 +78,7 @@ web-marisa/
 ```bash
 # 1. 后端(首次启动自动建表 server-py/webmarisa.db)
 cd server-py
-uv venv && uv pip install litestar uvicorn aiohttp aiosqlite "sqlalchemy[asyncio]>=2" jieba pyyaml
+uv venv && uv pip install -r requirements.txt   # 版本已锁定(含 hash),见「依赖管理」
 uv run python server.py   # WebMarisaServer 统一入口,读 conf.yaml,监听 3000
 
 # 2. 前端
@@ -94,7 +94,22 @@ python seed_qa.py  # 插入 39 条预设问答对
 浏览器打开 http://localhost:8888 即可聊天。
 
 > 也可以 `uvicorn main:app --host 127.0.0.1 --port 3000` ASGI 直连(测试/生产部署用,行为一致)。
-> 想用 MySQL/MariaDB?改 `conf.yaml` 里 `DB_TYPE=mysql` 并填 `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`,依赖加上 asyncmy,建库后启动自动建表/迁移。
+> 想用 MySQL/MariaDB?改 `conf.yaml` 里 `DB_TYPE=mysql` 并填 `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`,依赖换成 requirements-mysql.txt(asyncmy + pymysql),建库后启动自动建表/迁移。
+
+## 依赖管理
+
+`server-py/requirements.in` 是直接依赖(人读,每条带用途注释);`requirements.txt` 由它编译而来,钉死全部传递依赖并附 sha256 hash。
+
+```bash
+pip install -r requirements.txt                  # 安装(--require-hashes 可强校验)
+uv pip compile requirements.in --python-version 3.11 --generate-hashes -o requirements.txt  # 重新锁定
+```
+
+升级流程:改 `requirements.in` 的下限 → 重新 compile → 跑 `test_api.py` 与 `test_antiinject.py` 再提交。
+
+为什么不再逐个手装:`SQLAlchemy` 2.1 起把 `greenlet` 变成可选依赖,漏掉 `[asyncio]` extra 会在启动时`ImportError: The SQLAlchemy asyncio module requires greenlet`;锁文件把这类隐式依赖一并钉死。
+
+MySQL/MariaDB 部署额外装 `requirements-mysql.txt`(asyncmy 用于异步业务会话,pymysql 用于启动迁移的同步引擎)。
 
 ## API 文档
 
