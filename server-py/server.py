@@ -18,6 +18,23 @@ from pathlib import Path
 import config
 
 
+def _load_main():
+    """返回 main 模块;python main.py 时 __main__ 就是 main 本身,直接复用。
+
+    server.py 里 `import main` 在 `python main.py` 场景下会二次执行整个 main.py
+    (__main__ 与 main 是两个模块对象),凭空多出一个 MemoriseService 实例和第二份
+    内存索引。这里优先复用 __main__,保证全进程只有一个 svc。
+    """
+    current = sys.modules.get("main")
+    if current is not None:
+        return current
+    entry = sys.modules.get("__main__")
+    if entry is not None and getattr(entry, "create_app", None) is not None:
+        return entry
+    import main as _main
+    return _main
+
+
 class WebMarisaServer:
     """web-marisa 后端服务:conf.yaml 配置 + Litestar 应用 + uvicorn 运行器。"""
 
@@ -29,9 +46,7 @@ class WebMarisaServer:
         self.config_path = config_path or str(Path(__file__).resolve().parent / "conf.yaml")
         # 先加载配置,再导入依赖配置的模块(database/service 在 import 时建引擎/读配置)
         config.load_yaml(self.config_path)
-        import main  # 延迟导入:保证配置在 main 装配前就绪
-
-        self.app = main.create_app()
+        self.app = _load_main().create_app()
         self.host = host
         self.port = port or config.http_port()
 
