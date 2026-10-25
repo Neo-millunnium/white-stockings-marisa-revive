@@ -1,0 +1,8 @@
+# MySQL/MariaDB 部署的额外依赖（DB_TYPE=mysql 时安装）
+#   pip install -r requirements-mysql.txt
+#
+# 为什么是两套驱动：
+#   - asyncmy  —— 业务会话走异步引擎（mysql+asyncmy://）
+#   - pymysql  —— 启动迁移走同步引擎（mysql+pymysql://，见 config.sync_url）
+asyncmy>=0.2.9
+pymysql>=1.1

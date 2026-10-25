@@ -1,0 +1,22 @@
+# web-marisa 后端 —— 直接依赖清单（人读，勿直接安装）
+#
+# 安装请用锁文件：pip install -r requirements.txt
+# 重新锁定：  uv pip compile requirements.in --python-version 3.11 -o requirements.txt
+# 升级流程：  改这里的下限 -> 重新 compile -> 跑 test_api.py + test_antiinject.py
+#
+# MySQL 部署另装：pip install -r requirements-mysql.txt
+
+# ---- Web 框架 ----
+litestar>=2.25          # 2.17 起原生支持 dict 解析 form 参数，是放弃 FastAPI 的关键
+uvicorn>=0.30           # ASGI server
+
+# ---- 数据库（全异步）----
+# 注意：[asyncio] extra 不能省。SQLAlchemy 2.1 起 greenlet 变成可选依赖，
+# 只装 sqlalchemy 会在 create_async_engine 时 ImportError: requires greenlet
+sqlalchemy[asyncio]>=2.0.36
+aiosqlite>=0.20         # SQLite 异步驱动（默认部署形态，零外部服务）
+
+# ---- 工具能力 ----
+aiohttp>=3.9            # 天气/汇率/百科的共享 HTTP 会话（全异步）
+jieba>=0.42.1           # 中文分词：教学入库与倒排索引
+PyYAML>=6.0             # conf.yaml 配置加载
