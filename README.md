@@ -78,7 +78,7 @@ web-marisa/
 ```bash
 # 1. 后端(首次启动自动建表 server-py/webmarisa.db)
 cd server-py
-uv venv && uv pip install litestar uvicorn aiohttp aiosqlite sqlalchemy jieba pyyaml
+uv venv && uv pip install litestar uvicorn aiohttp aiosqlite "sqlalchemy[asyncio]>=2" jieba pyyaml
 uv run python server.py   # WebMarisaServer 统一入口,读 conf.yaml,监听 3000
 
 # 2. 前端
