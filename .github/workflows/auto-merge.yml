@@ -1,0 +1,29 @@
+name: Auto merge
+
+# 收到 PR（新建/重开/新提交/取消草稿）时开启 auto-merge：
+# 等规则集里的必需检查全部通过后，GitHub 会自动 squash 合并。
+# 用 pull_request_target 是为了让来自 fork 的 PR 也拿到可写 token；
+# 本工作流不 checkout PR 代码，只调用 gh，因此不存在执行 PR 代码的风险。
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  enable-auto-merge:
+    name: enable-auto-merge
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge (squash)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash --delete-branch "$PR_URL"
