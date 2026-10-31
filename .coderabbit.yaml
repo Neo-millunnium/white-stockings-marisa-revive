@@ -1,0 +1,34 @@
+# CodeRabbit 配置（https://docs.coderabbit.ai/reference/configuration）
+# 本仓库 PR 很少，采用「手动触发审查」模式：
+#   - 在 PR 评论里 @coderabbitai review 触发增量审查
+#   - @coderabbitai full review 触发全量审查
+language: zh-CN
+tone_instructions: "用中文、简明扼要；只报可执行的问题与风险，不要复述代码或写客套话。"
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  changed_files_summary: true
+
+  # 手动模式：不在 PR 创建/推送时自动审查
+  auto_review:
+    enabled: false
+    auto_incremental_review: false
+    drafts: false
+
+  path_filters:
+    - "!**/*.lock"
+    - "!client/package-lock.json"
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!docs/archive/**"
+
+chat:
+  auto_reply: true
